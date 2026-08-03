@@ -101,9 +101,9 @@ export class IssueStore implements IIssueStore {
     // store handlers from issue detail
     // parent
     if (issue && issue?.parent && issue?.parent?.id && issue?.parent?.project_id) {
-      this.issueService.retrieve(workspaceSlug, issue.parent.project_id, issue?.parent?.id).then((res) => {
-        this.rootIssueDetailStore.rootIssueStore.issues.addIssue([res]);
-      });
+      this.issueService
+        .retrieve(workspaceSlug, issue.parent.project_id, issue?.parent?.id)
+        .then((res) => this.rootIssueDetailStore.rootIssueStore.issues.addIssue([res]));
     }
     // assignees
     // labels
@@ -131,6 +131,15 @@ export class IssueStore implements IIssueStore {
 
     // fetch issue relations
     this.rootIssueDetailStore.relation.fetchRelations(workspaceSlug, projectId, issueId);
+
+    // fetch worklogs — the routes are registered under `issues/` only, so an
+    // epic detail would 404 here.
+    // Caught rather than left floating: worklogs are one widget among many and
+    // a failure here must not take the whole work item down with it.
+    if (this.serviceType !== EIssueServiceType.EPICS)
+      this.rootIssueDetailStore.worklog
+        .fetchWorklogs(workspaceSlug, projectId, issueId)
+        .catch((error) => console.error("worklogs", error));
 
     // fetching states
     // TODO: check if this function is required
@@ -286,9 +295,9 @@ export class IssueStore implements IIssueStore {
 
     // handle parent issue if exists
     if (issue?.parent && issue?.parent?.id && issue?.parent?.project_id) {
-      this.issueService.retrieve(workspaceSlug, issue.parent.project_id, issue.parent.id).then((res) => {
-        this.rootIssueDetailStore.rootIssueStore.issues.addIssue([res]);
-      });
+      this.issueService
+        .retrieve(workspaceSlug, issue.parent.project_id, issue.parent.id)
+        .then((res) => this.rootIssueDetailStore.rootIssueStore.issues.addIssue([res]));
     }
 
     // add identifiers to map

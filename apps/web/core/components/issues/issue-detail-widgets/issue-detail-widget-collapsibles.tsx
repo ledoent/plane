@@ -8,6 +8,7 @@ import React from "react";
 import { observer } from "mobx-react";
 // plane imports
 import type { TIssueServiceType, TWorkItemWidgets } from "@plane/types";
+import { EIssueServiceType } from "@plane/types";
 // hooks
 import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 import { useTimeLineRelationOptions } from "@/components/relations";
@@ -16,6 +17,7 @@ import { AttachmentsCollapsible } from "./attachments";
 import { LinksCollapsible } from "./links";
 import { RelationsCollapsible } from "./relations";
 import { SubIssuesCollapsible } from "./sub-issues";
+import { WorklogsCollapsible } from "./worklogs";
 
 type Props = {
   workspaceSlug: string;
@@ -34,6 +36,8 @@ export const IssueDetailWidgetCollapsibles = observer(function IssueDetailWidget
     subIssues: { subIssuesByIssueId },
     attachment: { getAttachmentsCountByIssueId, getAttachmentsUploadStatusByIssueId },
     relation: { getRelationCountByIssueId },
+    worklog: { getWorklogsByIssueId },
+    isWorklogFormOpen,
   } = useIssueDetail(issueServiceType);
   // derived values
   const issue = getIssueById(issueId);
@@ -44,6 +48,14 @@ export const IssueDetailWidgetCollapsibles = observer(function IssueDetailWidget
   const shouldRenderSubIssues = !!subIssues && subIssues.length > 0 && !hideWidgets?.includes("sub-work-items");
   const shouldRenderRelations = issueRelationsCount > 0 && !hideWidgets?.includes("relations");
   const shouldRenderLinks = !!issue?.link_count && issue?.link_count > 0 && !hideWidgets?.includes("links");
+  // Worklogs follow the other widgets in staying hidden until there is
+  // something to show, with one addition: an open form counts, or the "Log
+  // time" button would open a form inside a widget that never renders.
+  const worklogsCount = getWorklogsByIssueId(issueId)?.length ?? 0;
+  const shouldRenderWorklogs =
+    issueServiceType !== EIssueServiceType.EPICS &&
+    !hideWidgets?.includes("worklogs") &&
+    (worklogsCount > 0 || isWorklogFormOpen);
   const attachmentUploads = getAttachmentsUploadStatusByIssueId(issueId);
   const attachmentsCount = getAttachmentsCountByIssueId(issueId);
   const shouldRenderAttachments =
@@ -80,6 +92,15 @@ export const IssueDetailWidgetCollapsibles = observer(function IssueDetailWidget
       )}
       {shouldRenderAttachments && (
         <AttachmentsCollapsible
+          workspaceSlug={workspaceSlug}
+          projectId={projectId}
+          issueId={issueId}
+          disabled={disabled}
+          issueServiceType={issueServiceType}
+        />
+      )}
+      {shouldRenderWorklogs && (
+        <WorklogsCollapsible
           workspaceSlug={workspaceSlug}
           projectId={projectId}
           issueId={issueId}

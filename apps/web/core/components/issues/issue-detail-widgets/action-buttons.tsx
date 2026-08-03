@@ -5,17 +5,19 @@
  */
 
 import React from "react";
-import { Paperclip } from "lucide-react";
+import { Clock, Paperclip } from "lucide-react";
 import { useTranslation } from "@plane/i18n";
 import { LinkIcon, ViewsIcon, RelationPropertyIcon } from "@plane/propel/icons";
 // plane imports
 import type { TIssueServiceType, TWorkItemWidgets } from "@plane/types";
+import { EIssueServiceType } from "@plane/types";
 // local imports
 import { IssueAttachmentActionButton } from "./attachments";
 import { IssueLinksActionButton } from "./links";
 import { RelationActionButton } from "./relations";
 import { SubIssuesActionButton } from "./sub-issues";
 import { IssueDetailWidgetButton } from "./widget-button";
+import { WorklogsActionButton } from "./worklogs";
 
 type Props = {
   workspaceSlug: string;
@@ -83,6 +85,21 @@ export function IssueDetailWidgetActionButtons(props: Props) {
             <IssueDetailWidgetButton
               title={t("common.attach")}
               icon={<Paperclip className="h-3.5 w-3.5 flex-shrink-0" strokeWidth={2} />}
+              disabled={disabled}
+            />
+          }
+          disabled={disabled}
+          issueServiceType={issueServiceType}
+        />
+      )}
+      {/* Worklog routes are registered under `issues/` only — an epic has
+          nowhere to post the time to. */}
+      {!hideWidgets?.includes("worklogs") && issueServiceType !== EIssueServiceType.EPICS && (
+        <WorklogsActionButton
+          customButton={
+            <IssueDetailWidgetButton
+              title={t("worklogs.log_time")}
+              icon={<Clock className="h-3.5 w-3.5 flex-shrink-0" strokeWidth={2} />}
               disabled={disabled}
             />
           }

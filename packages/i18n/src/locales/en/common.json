@@ -867,5 +867,46 @@
       "description": "Export work items to a JSON file.",
       "short_description": "Export as json"
     }
+  },
+  "worklogs": {
+    "title": "Worklogs",
+    "log_time": "Log time",
+    "delete": "Delete worklog",
+    "empty": "No time logged on this work item yet.",
+    "form": {
+      "duration_label": "Duration",
+      "duration_placeholder": "1h 30m",
+      "date_label": "Date the work was done",
+      "description_label": "What did you work on?",
+      "description_placeholder": "What did you work on?",
+      "submit": "Log time",
+      "invalid_duration": "Enter a duration like 1h 30m, 90m or 1.5h, up to 24h."
+    },
+    "toasts": {
+      "created": {
+        "title": "Time logged",
+        "message": "The time has been successfully logged"
+      },
+      "not_created": {
+        "title": "Time not logged",
+        "message": "The time could not be logged"
+      },
+      "updated": {
+        "title": "Worklog updated",
+        "message": "The worklog has been successfully updated"
+      },
+      "not_updated": {
+        "title": "Worklog not updated",
+        "message": "The worklog could not be updated"
+      },
+      "removed": {
+        "title": "Worklog removed",
+        "message": "The worklog has been successfully removed"
+      },
+      "not_removed": {
+        "title": "Worklog not removed",
+        "message": "The worklog could not be removed"
+      }
+    }
   }
 }
