@@ -1,0 +1,7 @@
+# Local-only: the api's default 8000 collides with an ssh tunnel on this
+# machine. Docker reports the bind failure but the stale listener still answers
+# on 8000, so a health check against it looks like the app is up when it isn't.
+services:
+  api:
+    ports: !override
+      - "8010:8000"
