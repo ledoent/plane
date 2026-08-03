@@ -9,6 +9,7 @@ import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { Boxes, Share2, Star, User2 } from "lucide-react";
 import { CheckIcon, CloseIcon } from "@plane/propel/icons";
+import { TOAST_TYPE, setToast } from "@plane/propel/toast";
 // components
 import { LogoSpinner } from "@/components/common/logo-spinner";
 import { EmptySpace, EmptySpaceItem } from "@/components/ui/empty-space";
@@ -45,21 +46,44 @@ function WorkspaceInvitationPage() {
       : null
   );
 
+  /**
+   * Both responses used to end in `.catch(console.error)`, which meant every
+   * rejection — most often a 403 — logged to the console and rendered nothing.
+   * A refused click was indistinguishable from a click that never registered.
+   */
+  const handleInvitationError = (err: unknown) => {
+    const serverMessage =
+      typeof err === "object" && err !== null && "error" in err ? String((err as { error: unknown }).error) : undefined;
+
+    // By far the most common cause, and the one the server's generic wording
+    // does not explain: the session belongs to somebody other than the invitee.
+    // Plane requires the two to match — an invitation is not transferable, or
+    // anyone holding the link could take the membership (GHSA-4vj8-p63v-8p24).
+    // Naming both addresses turns a dead end into an instruction.
+    const invitedEmail = invitationDetail?.email;
+    const isWrongAccount =
+      !!currentUser?.email && !!invitedEmail && currentUser.email.toLowerCase() !== invitedEmail.toLowerCase();
+
+    setToast({
+      type: TOAST_TYPE.ERROR,
+      title: isWrongAccount ? "Signed in as a different account" : "Could not respond to invitation",
+      message: isWrongAccount
+        ? `This invitation is for ${invitedEmail}, but you are signed in as ${currentUser?.email}. Sign in as ${invitedEmail} to accept it.`
+        : (serverMessage ?? "Something went wrong. Please try again."),
+    });
+  };
+
   const handleAccept = () => {
-    if (!invitationDetail) return;
-    workspaceService
+    if (!invitationDetail || !token) return;
+    void workspaceService
       .joinWorkspace(invitationDetail.workspace.slug, invitationDetail.id, {
         accepted: true,
         token: token,
       })
-      .then(() => {
-        if (invitationDetail.email === currentUser?.email) {
-          router.push(`/${invitationDetail.workspace.slug}`);
-        } else {
-          router.push("/");
-        }
-      })
-      .catch((err: unknown) => console.error(err));
+      .then(() =>
+        router.push(invitationDetail.email === currentUser?.email ? `/${invitationDetail.workspace.slug}` : "/")
+      )
+      .catch(handleInvitationError);
   };
 
   const handleReject = () => {
@@ -69,10 +93,8 @@ function WorkspaceInvitationPage() {
         accepted: false,
         token: token,
       })
-      .then(() => {
-        router.push("/");
-      })
-      .catch((err: unknown) => console.error(err));
+      .then(() => router.push("/"))
+      .catch(handleInvitationError);
   };
 
   return (
