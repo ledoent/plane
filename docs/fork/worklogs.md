@@ -224,10 +224,32 @@ corrections safe.
 
 ## Deployment
 
-**Live at https://plane.ledoweb.com** (2026-08-03), running **upstream CE
-v1.4.0** — not this fork, so worklogs are not on it yet. Config, secrets
-recipe, smoke tests and the values change needed to switch to fork images:
+**Live at https://plane.ledoweb.com** (2026-08-03), running **fork images**
+`registry.hz.ledoweb.com/ledoent/plane-*:v1.4.0-worklogs-de1fb87`, built by
+`.github/workflows/ledoent-build.yml`. Migration `0123_issueworklog` is
+applied. Config, secrets recipe and smoke tests:
 `~/projects/ledoent/infra/deployments/plane/`.
+
+All five images are fork-built even though only frontend and backend carry
+worklogs code: the chart composes every image as `<image>:{{ .planeVersion }}`,
+so the tag is global and a mixed fork/upstream deployment is not expressible
+without patching the chart.
+
+**Uploads need bucket CORS, and the failure is deceptive.** Plane mints a
+presigned POST and the _browser_ uploads straight to S3, then calls back to
+mark the asset complete. With no CORS rule the object still lands in the bucket
+— the write succeeds — but the browser blocks JS from reading the response, so
+the callback never fires. The symptom is avatars and project covers failing
+while the API log shows nothing but `200`s and the bytes sit in S3 with
+`FileAsset.is_uploaded = False`. Rule and verification in the deployment README.
+
+**Google sign-in is configured in the database, not the chart.**
+`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `IS_GOOGLE_ENABLED` are
+`InstanceConfiguration` rows (the secret Fernet-encrypted off `SECRET_KEY`), so
+they survive redeploys and never touch a values file. Note `/api/instances/` is
+cached for two hours — writing the rows directly requires
+`invalidate_cache_directly(path="/api/instances/", user=False)` or the change
+appears to do nothing.
 
 Both hostnames now resolve to the cluster ingress, `49.13.40.172`:
 `plane.hz.ledoweb.com` via the `*.hz` wildcard, and `plane.ledoweb.com` via an
