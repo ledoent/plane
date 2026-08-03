@@ -78,6 +78,30 @@ export class PlaneClient {
   get = (url: string) => this.json("GET", url);
   post = (url: string, data: unknown) => this.json("POST", url, data);
   patch = (url: string, data: unknown) => this.json("PATCH", url, data);
+
+  /**
+   * Clear the first-run gates. A user created through sign-up alone has an
+   * unfinished profile, so the web app redirects every route to `/onboarding/`
+   * — the HTTP suite never notices, but a browser spec would only ever see the
+   * onboarding form.
+   */
+  async completeOnboarding(displayName = "E2E User") {
+    await this.patch("/api/users/me/", {
+      first_name: displayName.split(" ")[0],
+      last_name: displayName.split(" ").slice(1).join(" ") || "User",
+      display_name: displayName,
+    });
+    await this.patch("/api/users/me/onboard/", { is_onboarded: true });
+    await this.patch("/api/users/me/tour-completed/", { is_tour_completed: true });
+  }
+
+  /**
+   * The signed-in session as a browser storage state, so a UI spec can adopt
+   * the identity this client already created instead of driving sign-up
+   * through the form. Cookies are not port-scoped, so a session set on
+   * `localhost:8010` is sent to the web app on `localhost:3000` unchanged.
+   */
+  storageState = () => this.ctx.storageState();
 }
 
 /** A workspace, project and work item, built through the same API the UI uses. */
@@ -96,10 +120,9 @@ export async function seedWorkItem(client: PlaneClient): Promise<Seed> {
     identifier: `W${stamp.slice(-4)}`,
   });
 
-  const issue = await client.post(
-    `/api/workspaces/${workspace.slug}/projects/${project.id}/issues/`,
-    { name: `Track time ${stamp}` }
-  );
+  const issue = await client.post(`/api/workspaces/${workspace.slug}/projects/${project.id}/issues/`, {
+    name: `Track time ${stamp}`,
+  });
 
   return {
     workspaceSlug: workspace.slug,

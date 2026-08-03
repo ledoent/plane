@@ -15,7 +15,7 @@ Plane Community Edition has no time tracking. Worklogs are a paid feature from
 **Pro ($6/seat/month)**; the free tier also caps at 12 users.
 
 Checked before writing any code, because the answer changes what this work
-*is*: the feature is **absent from CE**, not present-but-gated. There is no
+_is_: the feature is **absent from CE**, not present-but-gated. There is no
 worklog model in `apps/api/plane/db/models/`, and `plane.license` handles
 instance registration and telemetry, not per-feature entitlement. The only
 trace of worklogs in the CE tree is an empty-state illustration at
@@ -27,13 +27,15 @@ a modified network-served work.
 
 ## Status
 
-| Piece | State |
-|---|---|
-| Model, migration, serializer, viewset, routes | **done** |
-| Django contract tests (14) | **done, passing** |
-| Playwright e2e against the running image (9) | **done, passing** |
-| **Web UI** | **not started** — the feature is API-only |
-| Odoo billing sync | not started |
+| Piece                                         | State             |
+| --------------------------------------------- | ----------------- |
+| Model, migration, serializer, viewset, routes | **done**          |
+| Django contract tests (14)                    | **done, passing** |
+| Playwright e2e — HTTP (9)                     | **done, passing** |
+| Web UI — service, store, Worklogs widget      | **done**          |
+| Duration parser unit tests (14)               | **done, passing** |
+| Playwright e2e — browser (3)                  | **done, passing** |
+| Odoo billing sync                             | not started       |
 
 ## What was built
 
@@ -79,7 +81,7 @@ entered on Monday; the billing period follows when the work happened.
 
 ## Bugs found on the way
 
-**`logged_at` defaulted to `timezone.now`** — a *datetime* into a `DateField`.
+**`logged_at` defaulted to `timezone.now`** — a _datetime_ into a `DateField`.
 DRF refuses to coerce rather than drop timezone information, so every create
 returned 500. Now `timezone.localdate`. The fix was squashed into the original
 migration; one unreleased change should not ship two migrations.
@@ -141,25 +143,62 @@ docker compose -f docker-compose-local.yml -f docker-compose.override.yml \
    that existed on the host. Re-run after listing the directory from inside the
    container.
 
-## Next: the web UI
+## The web UI
 
-The feature is unusable from the interface today. The work is a standard Plane
-vertical slice:
+A **Worklogs** collapsible on the work-item detail, built on the links widget's
+pattern. Entries show author, date, duration and description; the collapsible's
+indicator is the total from `worklogs/summary/`; a "Log time" button in the
+action row opens an inline form.
 
-| Layer | Where | Pattern to copy |
-|---|---|---|
-| Service | `apps/web/core/services/issue/` | `issue_comment.service.ts` |
-| Store | `apps/web/core/store/issue/` | the comment/link stores |
-| Component | `apps/web/core/components/issues/issue-detail-widgets/` | the links widget |
-| Wiring | `issue-detail-widget-collapsibles.tsx`, `action-buttons.tsx` | — |
+```
+packages/types/src/issues/issue_worklog.ts
+packages/utils/src/work-item/worklog.ts          parser + formatter
+packages/utils/tests/worklog.test.ts             14 tests
+apps/web/core/services/issue/issue_worklog.service.ts
+apps/web/core/store/issue/issue-details/worklog.store.ts
+apps/web/core/components/issues/issue-detail-widgets/worklogs/
+e2e/worklogs.ui.spec.ts                          3 browser tests
+```
 
-Suggested surface: a **Worklogs** collapsible on the work-item detail showing
-entries with author, date and duration, a total from
-`worklogs/summary/`, and an inline "Log time" input accepting `1h 30m` /
-`90m` / `1.5h`.
+### Decisions worth not relitigating
 
-Then extend `e2e/worklogs.spec.ts` with a browser-driven test — the current
-nine drive HTTP only, which is real verification of the API but not of the UI.
+**The indicator is the total, not a count.** "Twelve entries" is not
+information; "6h 30m" is the number people opened the widget for.
+
+**Duration is parsed on the client, and the parser is unit-tested.** The field
+takes `1h 30m`, `90m`, `1.5h` or a bare `90`, and a bare number means minutes
+because that is the unit the API stores. Anything unreadable is refused rather
+than guessed — a wrong duration becomes a wrong invoice line. The browser spec
+asserts that typing `1h 30m` stores the integer `90`, which is exactly where a
+client-side parser and the server can drift apart.
+
+**The widget stays hidden until there is something to show**, matching links
+and attachments — with the addition that an open form counts, or the "Log time"
+button would open a form inside a widget that never renders.
+
+**Worklogs are hidden for epics.** The routes are registered under `issues/`
+only, so an epic has nowhere to post to; both the collapsible and the action
+button check `issueServiceType`.
+
+**Delete is shown only to the author**, mirroring the API rule rather than
+letting the UI offer an action the server will refuse.
+
+### Traps found building it
+
+1. **`@plane/utils` had no test runner.** Vitest was already in the workspace
+   catalog, so the parser tests cost one devDependency and a `test` script.
+2. **A user created through the API alone is not onboarded**, so the web app
+   redirects every route to `/onboarding/` and a browser spec sees only the
+   profile form. `PlaneClient.completeOnboarding()` clears it.
+3. **`CORS_ALLOWED_ORIGINS` unset means `CSRF_TRUSTED_ORIGINS` is empty**, and
+   Django then rejects browser POSTs cross-origin. Set it in `apps/api/.env` to
+   the web origin before running the browser suite.
+4. **Playwright's `count()` takes one snapshot and does not retry.** Use
+   `await expect(rows).toHaveCount(n)` after any action that posts.
+5. **`localhost` resolves to `::1` before `127.0.0.1` on macOS.** Two dev
+   servers can hold the same port on different stacks, and the browser silently
+   reaches the other application. Check with `lsof -nP -iTCP:<port> -sTCP:LISTEN`
+   and confirm the page title.
 
 ## The strategic question this is really about
 
@@ -174,8 +213,8 @@ it (see below). It is whether Plane is enough of an upgrade to justify
 rebuilding the billing path against a different API. Three options:
 
 1. **Plane for issues, Huly for time** — two tools, the existing sync unchanged.
-2. **Plane with this fork's worklogs** — one tool, but the UI still needs
-   building and a new Odoo sync written against these endpoints.
+2. **Plane with this fork's worklogs** — one tool. The API and the UI are both
+   built now; what remains is a new Odoo sync written against these endpoints.
 3. **Plane Pro** for the seats that log time — no fork to maintain, per-seat cost.
 
 If (2), the sync is a near-copy of `huly-odoo-timesync`: the shape is the same
@@ -183,11 +222,26 @@ If (2), the sync is a near-copy of `huly-odoo-timesync`: the shape is the same
 `ir.model.data` external-id idempotency pattern — it is what makes re-runs and
 corrections safe.
 
-## Deployment, when it comes to that
+## Deployment
 
-`plane.hz.ledoweb.com` already resolves (wildcard, 49.13.40.172).
-`plane.ledoweb.com` does **not** — it needs a record; every other service uses
-the `*.hz.ledoweb.com` convention.
+**Live at https://plane.ledoweb.com** (2026-08-03), running **upstream CE
+v1.4.0** — not this fork, so worklogs are not on it yet. Config, secrets
+recipe, smoke tests and the values change needed to switch to fork images:
+`~/projects/ledoent/infra/deployments/plane/`.
+
+Both hostnames now resolve to the cluster ingress, `49.13.40.172`:
+`plane.hz.ledoweb.com` via the `*.hz` wildcard, and `plane.ledoweb.com` via an
+A record added directly (Cloudflare zone `ledoweb.com`, unproxied).
+
+Unproxied is deliberate and matches `observe.ledoweb.com`, the other
+cluster-hosted app: the orange cloud caps uploads at 100 MB on the Free plan,
+which a tool with file attachments will hit.
+
+Worth knowing for the next host: the cluster's `letsencrypt-prod` ClusterIssuer
+resolves `ledoweb.com` by **DNS-01 via Cloudflare**, not HTTP-01 — its
+`dnsZones` selector beats the http01 catch-all. cert-manager writes a
+`_acme-challenge` TXT record and waits on its own propagation check, so a
+`pending` challenge for a few minutes is normal rather than a fault.
 
 **Volume headroom is the binding constraint, not CPU or memory.** Hetzner caps
 attached volumes at 16/server; the cluster sits at worker1 16/16, worker2
@@ -196,14 +250,21 @@ StorageClass, and the CE chart ships `storageClass: ""` for postgres, valkey,
 rabbitmq and minio, so a default install would ask for 4 and leave pods
 Pending.
 
-It fits only if shaped deliberately. The chart supports external everything
-(`pgdb_remote_url`, `remote_redis_url`, `external_rabbitmq_url`,
-`aws_s3_endpoint_url`):
+It fits only if shaped deliberately. As deployed it consumes **zero** new
+volumes — the count was 46/48 before the install and 46/48 after:
 
-| Component | Placement | hcloud slots |
-|---|---|---|
-| Postgres | CNPG cluster (operator already runs 8+) | 1 |
-| Valkey, RabbitMQ | `local-path` — cache and queue, rebuildable | 0 |
-| Object storage | external S3/GCS instead of bundled MinIO | 0 |
+| Component        | Placement                                           | hcloud slots |
+| ---------------- | --------------------------------------------------- | ------------ |
+| Postgres         | `plane` db on the existing `shared-db` CNPG cluster | 0            |
+| Valkey, RabbitMQ | `local-path` — cache and queue, rebuildable         | 0            |
+| Object storage   | Hetzner S3 `ledo-plane-uploads`, MinIO disabled     | 0            |
 
-App tier is trivial: 7 deployments at 50m CPU / 50Mi memory requested each.
+Putting the database in the _existing_ shared cluster rather than a new CNPG
+cluster is what turns the postgres line from 1 slot into 0, and it inherits the
+30-day backups already configured there.
+
+App tier is trivial: 7 deployments at 50m CPU / 50Mi memory requested each —
+with one exception. **The worker OOMKills at the chart's 1000Mi default**
+(exit 137, restart loop) because Celery imports every module in
+`plane.bgtasks` at boot; it needs ~2000Mi. The loop reads like a crash and is
+purely the limit.
