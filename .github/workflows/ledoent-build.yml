@@ -1,0 +1,176 @@
+name: ledoent build (Plane images → Zot)
+
+# Builds linux/amd64 images for the Plane services from the fork's feature
+# branch and pushes to registry.hz.ledoweb.com/ledoent/plane-*.
+#
+# This is a fork-owned file, deliberately NOT an edit to upstream's
+# build-branch.yml (which targets Docker Hub with makeplane credentials).
+# Same nesting principle as docs/fork/ — nothing here collides on a merge
+# from makeplane/plane.
+#
+# All five images are built even though only web and api contain worklogs
+# code: the Helm chart composes every image as `<image>:{{ .planeVersion }}`,
+# so the tag is global and a mixed fork/upstream deployment is not
+# expressible without patching the chart.
+#
+# Requires the ZOT_PUSH_PASSWORD repo secret (robot-push-ledoent, scoped to
+# ledoent/** with create+update but not delete).
+
+on:
+  push:
+    branches: [feat/worklogs]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag (e.g. v1.4.0-worklogs-abc1234). Defaults to planeVersion + git SHA."
+        required: false
+
+concurrency:
+  group: ledoent-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZOT_REGISTRY: registry.hz.ledoweb.com
+  ZOT_IMAGE_PREFIX: registry.hz.ledoweb.com/ledoent
+
+jobs:
+  # Gate the push on the cheap checks. The Playwright suites need a running
+  # Postgres/Redis/RabbitMQ stack and stay local; these three catch the
+  # failures most likely to reach an image.
+  check:
+    name: Typecheck, lint, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck and lint
+        run: pnpm exec turbo run check:types check:lint
+
+      - name: Unit tests
+        run: pnpm --filter @plane/utils test
+
+  build:
+    name: Build and push images
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version tag
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            # planeVersion in the chart values is the upstream base this fork
+            # sits on; encoding it keeps the tag honest about provenance.
+            BASE=v1.4.0
+            SHA=$(git rev-parse --short HEAD)
+            TAG="${BASE}-worklogs-${SHA}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building $TAG"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Zot registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ZOT_REGISTRY }}
+          username: robot-push-ledoent
+          password: ${{ secrets.ZOT_PUSH_PASSWORD }}
+
+      # The VITE_* build args are left at their Dockerfile defaults on purpose:
+      # empty base URLs (same origin) with /god-mode, /spaces and /live base
+      # paths already match the single-host ingress this deploys behind.
+
+      - name: Build and push plane-frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile.web
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ZOT_IMAGE_PREFIX }}/plane-frontend:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+      - name: Build and push plane-space
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/space/Dockerfile.space
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ZOT_IMAGE_PREFIX }}/plane-space:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=space
+          cache-to: type=gha,scope=space,mode=max
+
+      - name: Build and push plane-admin
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/admin/Dockerfile.admin
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ZOT_IMAGE_PREFIX }}/plane-admin:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=admin
+          cache-to: type=gha,scope=admin,mode=max
+
+      - name: Build and push plane-live
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/live/Dockerfile.live
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ZOT_IMAGE_PREFIX }}/plane-live:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=live
+          cache-to: type=gha,scope=live,mode=max
+
+      # Note the narrower context: Dockerfile.api COPYs requirements.txt from
+      # the build root, so it builds from apps/api rather than the repo root.
+      - name: Build and push plane-backend
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile.api
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ZOT_IMAGE_PREFIX }}/plane-backend:${{ steps.version.outputs.tag }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Summary
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          {
+            echo "### Images pushed to Zot"
+            echo ''
+            echo "**Tag:** \`$TAG\`"
+            echo ''
+            echo '| Service | Image |'
+            echo '|---|---|'
+            for SVC in plane-frontend plane-space plane-admin plane-live plane-backend; do
+              echo "| $SVC | \`${{ env.ZOT_IMAGE_PREFIX }}/$SVC:$TAG\` |"
+            done
+            echo ''
+            echo 'Deploy with:'
+            echo '```sh'
+            echo "helm upgrade plane /tmp/plane-helm/charts/plane-ce -n plane \\"
+            echo "  -f values.yaml -f values.secret.yaml --set planeVersion=$TAG"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
