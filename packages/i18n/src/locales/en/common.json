@@ -871,6 +871,7 @@
   "worklogs": {
     "title": "Worklogs",
     "log_time": "Log time",
+    "edit": "Edit worklog",
     "delete": "Delete worklog",
     "empty": "No time logged on this work item yet.",
     "form": {

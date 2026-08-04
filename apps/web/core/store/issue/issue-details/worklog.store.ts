@@ -5,14 +5,13 @@
  */
 
 import { set } from "lodash-es";
-import { action, computed, makeObservable, observable, runInAction } from "mobx";
+import { action, makeObservable, observable, runInAction } from "mobx";
 // plane imports
 import type {
   TIssueWorklog,
   TIssueWorklogEditableFields,
   TIssueWorklogIdMap,
   TIssueWorklogMap,
-  TIssueWorklogSummary,
   TIssueWorklogSummaryMap,
 } from "@plane/types";
 // services
@@ -44,12 +43,9 @@ export interface IIssueWorklogStore extends IIssueWorklogStoreActions {
   worklogs: TIssueWorklogIdMap;
   worklogMap: TIssueWorklogMap;
   summaryMap: TIssueWorklogSummaryMap;
-  // computed
-  issueWorklogs: string[] | undefined;
   // helper methods
   getWorklogsByIssueId: (issueId: string) => string[] | undefined;
   getWorklogById: (worklogId: string) => TIssueWorklog | undefined;
-  getSummaryByIssueId: (issueId: string) => TIssueWorklogSummary | undefined;
   getTotalDurationByIssueId: (issueId: string) => number;
 }
 
@@ -69,8 +65,6 @@ export class IssueWorklogStore implements IIssueWorklogStore {
       worklogs: observable,
       worklogMap: observable,
       summaryMap: observable,
-      // computed
-      issueWorklogs: computed,
       // actions
       addWorklogs: action.bound,
       fetchWorklogs: action,
@@ -84,13 +78,6 @@ export class IssueWorklogStore implements IIssueWorklogStore {
     this.issueWorklogService = new IssueWorklogService();
   }
 
-  // computed
-  get issueWorklogs() {
-    const issueId = this.rootIssueDetailStore.peekIssue?.issueId;
-    if (!issueId) return undefined;
-    return this.worklogs[issueId] ?? undefined;
-  }
-
   // helper methods
   getWorklogsByIssueId = (issueId: string) => {
     if (!issueId) return undefined;
@@ -100,11 +87,6 @@ export class IssueWorklogStore implements IIssueWorklogStore {
   getWorklogById = (worklogId: string) => {
     if (!worklogId) return undefined;
     return this.worklogMap[worklogId] ?? undefined;
-  };
-
-  getSummaryByIssueId = (issueId: string) => {
-    if (!issueId) return undefined;
-    return this.summaryMap[issueId] ?? undefined;
   };
 
   /**

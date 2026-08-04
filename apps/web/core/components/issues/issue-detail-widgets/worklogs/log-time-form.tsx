@@ -9,13 +9,22 @@ import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@plane/i18n";
 import { Button } from "@plane/propel/button";
 import { Input } from "@plane/propel/input";
-import { parseDurationToMinutes } from "@plane/utils";
+import { formatMinutesAsDuration, parseDurationToMinutes } from "@plane/utils";
 // local imports
 import type { TWorklogOperations } from "./helper";
 
 type Props = {
   worklogOperations: TWorklogOperations;
   onClose: () => void;
+  /** Present when correcting an existing entry rather than adding one. The
+   *  same form serves both: the fields and validation are identical, and only
+   *  the call at the end differs. */
+  editing?: {
+    worklogId: string;
+    duration: number;
+    loggedAt: string;
+    description: string;
+  };
 };
 
 /** `new Date()` in the browser is local time; `toISOString` is UTC and would
@@ -28,13 +37,13 @@ const todayAsISODate = (): string => {
 };
 
 export function LogTimeForm(props: Props) {
-  const { worklogOperations, onClose } = props;
+  const { worklogOperations, onClose, editing } = props;
   // i18n
   const { t } = useTranslation();
-  // state
-  const [duration, setDuration] = useState("");
-  const [loggedAt, setLoggedAt] = useState(todayAsISODate);
-  const [description, setDescription] = useState("");
+  // state — prefilled from the entry being corrected, blank when adding.
+  const [duration, setDuration] = useState(editing ? formatMinutesAsDuration(editing.duration) : "");
+  const [loggedAt, setLoggedAt] = useState(editing ? editing.loggedAt : todayAsISODate);
+  const [description, setDescription] = useState(editing ? editing.description : "");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const durationRef = useRef<HTMLInputElement>(null);
@@ -59,9 +68,14 @@ export function LogTimeForm(props: Props) {
     setError(null);
     setIsSubmitting(true);
     try {
-      await worklogOperations.create({ duration: minutes, logged_at: loggedAt, description });
-      setDuration("");
-      setDescription("");
+      const payload = { duration: minutes, logged_at: loggedAt, description };
+      if (editing) {
+        await worklogOperations.update(editing.worklogId, payload);
+      } else {
+        await worklogOperations.create(payload);
+        setDuration("");
+        setDescription("");
+      }
       onClose();
     } catch {
       // The operation helper has already raised a toast carrying the API's
@@ -75,7 +89,7 @@ export function LogTimeForm(props: Props) {
     <form
       onSubmit={handleSubmit}
       className="mt-2 flex flex-col gap-2 rounded-sm border-[0.5px] border-subtle bg-surface-2 p-3"
-      data-testid="worklog-form"
+      data-testid={editing ? "worklog-edit-form" : "worklog-form"}
     >
       <div className="flex flex-wrap items-start gap-2">
         <div className="flex flex-col gap-1">
@@ -118,7 +132,7 @@ export function LogTimeForm(props: Props) {
       </div>
       <div className="flex items-center gap-2">
         <Button type="submit" variant="primary" size="base" loading={isSubmitting} data-testid="worklog-submit">
-          {isSubmitting ? t("common.adding") : t("worklogs.form.submit")}
+          {isSubmitting ? t("common.adding") : editing ? t("common.save") : t("worklogs.form.submit")}
         </Button>
         <Button type="button" variant="secondary" size="base" onClick={onClose}>
           {t("common.cancel")}

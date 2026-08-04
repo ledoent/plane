@@ -4,12 +4,12 @@
  * See the LICENSE file for details.
  */
 
-import React from "react";
+import React, { useState } from "react";
 import { observer } from "mobx-react";
 // plane imports
 import { useTranslation } from "@plane/i18n";
 import { Avatar } from "@plane/propel/avatar";
-import { TrashIcon } from "@plane/propel/icons";
+import { EditIcon, TrashIcon } from "@plane/propel/icons";
 import { Tooltip } from "@plane/propel/tooltip";
 import type { TIssueServiceType } from "@plane/types";
 import { formatMinutesAsDuration, renderFormattedDate } from "@plane/utils";
@@ -19,6 +19,7 @@ import { usePlatformOS } from "@/hooks/use-platform-os";
 import { useUser } from "@/hooks/store/user";
 // local imports
 import type { TWorklogOperations } from "./helper";
+import { LogTimeForm } from "./log-time-form";
 
 type Props = {
   worklogId: string;
@@ -37,6 +38,8 @@ export const WorklogItem = observer(function WorklogItem(props: Props) {
   } = useIssueDetail(issueServiceType);
   const { data: currentUser } = useUser();
   const { isMobile } = usePlatformOS();
+  // state
+  const [isEditing, setIsEditing] = useState(false);
   // derived values
   const worklog = getWorklogById(worklogId);
 
@@ -45,8 +48,23 @@ export const WorklogItem = observer(function WorklogItem(props: Props) {
   // The API refuses an edit or delete from anyone but the author, so hiding the
   // control keeps the UI honest about what it will let you do.
   const isAuthor = !!currentUser?.id && currentUser.id === worklog.logged_by;
-  const canDelete = isAuthor && !disabled;
+  const canModify = isAuthor && !disabled;
   const author = worklog.logged_by_detail;
+
+  if (isEditing) {
+    return (
+      <LogTimeForm
+        worklogOperations={worklogOperations}
+        onClose={() => setIsEditing(false)}
+        editing={{
+          worklogId: worklog.id,
+          duration: worklog.duration,
+          loggedAt: worklog.logged_at,
+          description: worklog.description ?? "",
+        }}
+      />
+    );
+  }
 
   return (
     <div
@@ -76,7 +94,18 @@ export const WorklogItem = observer(function WorklogItem(props: Props) {
         <span className="text-caption-sm-regular text-placeholder">
           {author?.display_name ?? t("common.unknown_user")}
         </span>
-        {canDelete && (
+        {canModify && (
+          <button
+            type="button"
+            aria-label={t("worklogs.edit")}
+            className="opacity-0 transition-opacity group-hover:opacity-100"
+            onClick={() => setIsEditing(true)}
+            data-testid="worklog-edit"
+          >
+            <EditIcon className="size-3.5 text-tertiary hover:text-primary" />
+          </button>
+        )}
+        {canModify && (
           <button
             type="button"
             aria-label={t("worklogs.delete")}

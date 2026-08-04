@@ -129,4 +129,42 @@ test.describe("recording time from the work item page", () => {
       await context.close();
     }
   });
+
+  test("an entry can be corrected in place", async ({ browser }) => {
+    const { context, page, logTime } = await openWorkItem(browser);
+
+    try {
+      const rows = page.getByTestId("worklog-item");
+      const before = await rows.count();
+
+      await logTime.click();
+      await page.getByTestId("worklog-duration-input").fill("30m");
+      await page.getByTestId("worklog-description-input").fill("Initial estimate");
+      await page.getByTestId("worklog-submit").click();
+      await expect(rows).toHaveCount(before + 1);
+
+      // Edit only appears on hover, and only for the author.
+      await rows.first().hover();
+      await page.getByTestId("worklog-edit").first().click();
+
+      // The form opens prefilled — the round trip through the formatter is the
+      // part worth asserting, since minutes are stored but durations are typed.
+      const form = page.getByTestId("worklog-edit-form");
+      await expect(form).toBeVisible();
+      await expect(page.getByTestId("worklog-duration-input")).toHaveValue("30m");
+
+      await page.getByTestId("worklog-duration-input").fill("2h 15m");
+      await page.getByTestId("worklog-submit").click();
+
+      await expect(page.getByTestId("worklog-edit-form")).toHaveCount(0);
+      await expect(page.getByTestId("worklog-duration").first()).toHaveText("2h 15m");
+
+      // What the server stored, not just what the row renders.
+      const logs = await client.get(seed.worklogsUrl);
+      const edited = logs.find((l: any) => l.description === "Initial estimate");
+      expect(edited.duration).toBe(135);
+    } finally {
+      await context.close();
+    }
+  });
 });
