@@ -127,6 +127,42 @@ The production image ships without pytest and the settings module reads
 `REDIS_URL` at import, hence the env vars — the tests themselves touch no
 database.
 
+## The backend fix alone does nothing in the UI
+
+Found by standing the branch up against a restore of production and clicking it,
+which the API-level tests could not have caught.
+
+The Power-K palette re-filters the API's results **client-side** before
+rendering. Both `power-k/ui/modal/wrapper.tsx` and
+`navigation/top-nav-power-k.tsx` passed `cmdk` this filter:
+
+```ts
+if (i18nValue.toLowerCase().includes(search.toLowerCase())) return 1;
+return 0;
+```
+
+The item's value is built from its **title** (`search-results.tsx`), so:
+
+- `gateway` renders — the word is in DUROPC-22's title.
+- `sage` renders **nothing** — the API returns 5 matches, the palette throws
+  all 5 away, because "sage" appears only in the body.
+
+It is the same contiguous-substring assumption the backend had, duplicated in
+the frontend, in the same copy-pasted-twice shape. `includes()` on the raw
+query also discards multi-word matches whose words are not adjacent, so it
+defeats the tokenization fix too.
+
+The fix mirrors the backend one: a single shared `powerKCommandFilter`
+(`power-k/ui/modal/filter.ts`) replacing both copies. Static commands still
+match on their visible label; server-driven results are passed through
+untouched, marked by a `server-result:` value prefix — the same escape hatch
+the existing `no-results` sentinel already used. The server decided the match
+against fields the palette never renders; re-deciding it on the title is what
+threw the results away.
+
+**Any future work that widens what the API searches needs this frontend change
+too, or it will look like it did nothing.**
+
 ## Known wart: sequence-id noise on multi-word queries
 
 Numeric tokens are matched against `sequence_id` and OR-ed onto the **whole**
