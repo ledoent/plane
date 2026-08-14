@@ -163,11 +163,11 @@ threw the results away.
 **Any future work that widens what the API searches needs this frontend change
 too, or it will look like it did nothing.**
 
-## Known wart: sequence-id noise on multi-word queries
+## Sequence-id lookup is single-token only
 
 Numeric tokens are matched against `sequence_id` and OR-ed onto the **whole**
-predicate, so `level 3 rate` returns the one real hit plus every issue that
-happens to be number 3 in any project:
+predicate. Upstream does that for any query, so `level 3 rate` returned the one
+real hit plus every issue that happens to be number 3 in any project:
 
 ```
 #3    2. Invite your team 🤜🤛
@@ -176,14 +176,21 @@ happens to be number 3 in any project:
 #3    2. Invite your team 🤜🤛          <- other projects
 ```
 
-This is **pre-existing upstream behaviour**, not a regression — the old code
-OR-ed sequence matches the same way. It was preserved on purpose so the
-upstream commit is a strict superset: nothing that matched before stops
-matching, which is the strongest argument for merging it.
+Five of six results were noise. The id lookup now applies **only to
+single-token queries**: someone typing three words is searching prose, not
+looking up an id. `22` and `DUROPC-22` still jump straight to the issue, which
+is how the shortcut is actually used.
 
-The fix, if wanted, is to apply the sequence OR only when the query is a single
-token — someone typing three words is not searching by ID. That narrows results
-versus upstream, so it is a separate decision from the tokenization fix.
+| Query          | before     | after |
+| -------------- | ---------- | ----- |
+| `level 3 rate` | 6 (1 real) | **1** |
+| `22`           | 4          | 4     |
+| `DUROPC-22`    | 1          | 1     |
+
+This is the one change that is **not** a strict superset of upstream: `fix 22`
+no longer reaches issue #22 by number. That is deliberate, and it is why it
+sits in its own commit — the tokenization commit stays cherry-pickable alone if
+upstream would rather not narrow anything.
 
 ## Deploying
 

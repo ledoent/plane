@@ -50,12 +50,18 @@ def build_search_query(query, fields, sequence_fields=(), sequence_query_max_len
     irrelevant.
 
     ``sequence_fields`` are integer columns (an issue's ``sequence_id``) matched
-    exactly against any numeric token. They are OR-ed onto the whole predicate
-    rather than folded into the per-token AND so that a query mixing words and a
-    number keeps surfacing that record by number, as it did before tokenizing.
+    exactly against a numeric token, and OR-ed onto the whole predicate so that
+    typing an issue number jumps straight to it.
 
-    ``sequence_query_max_length`` skips sequence matching for queries longer
-    than the given length, so prose does not get mined for stray digits.
+    That lookup applies to **single-token queries only**. Someone typing three
+    words is searching prose, not looking up an id, and OR-ing the id match into
+    a multi-word query drags in every record that happens to carry that number:
+    "level 3 rate" returned its one real hit plus every issue numbered 3 in
+    every project. Restricting it to one token keeps the id shortcut — which is
+    how it is actually used — and drops the noise.
+
+    ``sequence_query_max_length`` additionally skips the lookup for tokens
+    longer than the given length, so a long slug is not mined for stray digits.
 
     An empty query returns an empty ``Q()``, which filters nothing — callers
     rely on that to mean "no search term supplied".
@@ -75,7 +81,11 @@ def build_search_query(query, fields, sequence_fields=(), sequence_query_max_len
         text_query &= token_query
 
     sequence_query = Q()
-    if sequence_fields and (sequence_query_max_length is None or len(query) <= sequence_query_max_length):
+    if (
+        sequence_fields
+        and len(tokens) == 1
+        and (sequence_query_max_length is None or len(query) <= sequence_query_max_length)
+    ):
         for sequence_id in SEQUENCE_PATTERN.findall(query):
             for field in sequence_fields:
                 sequence_query |= Q(**{field: sequence_id})

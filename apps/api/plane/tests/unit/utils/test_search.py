@@ -72,14 +72,36 @@ class TestBuildSearchQuery:
         assert ("sequence_id", "22") in _children(q)
 
     def test_sequence_match_is_ored_onto_the_whole_predicate(self):
-        """A bare issue number keeps surfacing the issue even alongside words."""
+        """A bare issue number reaches the issue regardless of its title."""
         q = build_search_query(
-            "fix 22",
+            "22",
             fields=ISSUE_SEARCH_FIELDS,
             sequence_fields=ISSUE_SEQUENCE_FIELDS,
         )
         assert q.connector == Q.OR
         assert ("sequence_id", "22") in _children(q)
+
+    def test_identifier_and_number_in_one_token_still_matches_by_number(self):
+        q = build_search_query(
+            "DUROPC-22",
+            fields=ISSUE_SEARCH_FIELDS,
+            sequence_fields=ISSUE_SEQUENCE_FIELDS,
+        )
+        assert ("sequence_id", "22") in _children(q)
+
+    def test_multi_word_queries_do_not_match_by_sequence_id(self):
+        """Three words is prose, not an id lookup.
+
+        OR-ing the id match in would drag every issue numbered 3 in every
+        project into the results for "level 3 rate".
+        """
+        q = build_search_query(
+            "level 3 rate",
+            fields=ISSUE_SEARCH_FIELDS,
+            sequence_fields=ISSUE_SEQUENCE_FIELDS,
+        )
+        assert ("sequence_id", "3") not in _children(q)
+        assert q.connector == Q.AND
 
     def test_decimals_do_not_produce_sequence_matches(self):
         q = build_search_query(
@@ -99,8 +121,9 @@ class TestBuildSearchQuery:
         assert not any(lookup == "sequence_id" for lookup, _ in _children(q))
 
     def test_trailing_punctuation_still_matches_a_sequence_id(self):
+        """A trailing dot is sentence punctuation, not a decimal point."""
         q = build_search_query(
-            "issue 22.",
+            "22.",
             fields=ISSUE_SEARCH_FIELDS,
             sequence_fields=ISSUE_SEQUENCE_FIELDS,
         )
