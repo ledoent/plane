@@ -204,3 +204,65 @@ class TestS3StorageSignedURLExpiration:
         mock_s3_client.generate_presigned_url.assert_called_once()
         call_kwargs = mock_s3_client.generate_presigned_url.call_args[1]
         assert call_kwargs["ExpiresIn"] == 120
+
+
+@pytest.mark.unit
+class TestContentDisposition:
+    """Shared RFC 5987 Content-Disposition helper used by both backends."""
+
+    def test_encodes_given_filename(self):
+        from plane.settings.storage import _content_disposition
+
+        assert (
+            _content_disposition("attachment", "my report.pdf")
+            == "attachment; filename*=UTF-8''my%20report.pdf"
+        )
+
+    def test_defaults_to_random_filename_when_missing(self):
+        from plane.settings.storage import _content_disposition
+
+        value = _content_disposition("inline")
+        assert value.startswith("inline; filename*=UTF-8''")
+        # a uuid4 hex (32 chars) is used when no filename is supplied
+        assert len(value.split("''", 1)[1]) == 32
+
+
+@pytest.mark.unit
+class TestGCSSigningEmailResolution:
+    """The signing identity is where the subtle Workload Identity 'default' bug
+    lives: signing as "default" is an IAM 400, so resolution must not accept it."""
+
+    def test_explicit_env_override_wins(self):
+        from plane.settings.storage import GCSStorage
+
+        creds = Mock(service_account_email="adc@proj.iam.gserviceaccount.com")
+        with patch.dict(os.environ, {"GS_SIGNING_SA": "explicit@proj.iam.gserviceaccount.com"}):
+            assert (
+                GCSStorage._resolve_signing_email(creds)
+                == "explicit@proj.iam.gserviceaccount.com"
+            )
+
+    def test_uses_adc_identity_when_no_override(self):
+        from plane.settings.storage import GCSStorage
+
+        creds = Mock(service_account_email="adc@proj.iam.gserviceaccount.com")
+        with patch.dict(os.environ, {}, clear=True):
+            assert (
+                GCSStorage._resolve_signing_email(creds)
+                == "adc@proj.iam.gserviceaccount.com"
+            )
+
+    @patch(
+        "plane.settings.storage._metadata_service_account_email",
+        return_value="bound@proj.iam.gserviceaccount.com",
+    )
+    def test_falls_back_to_metadata_when_default(self, mock_metadata):
+        from plane.settings.storage import GCSStorage
+
+        creds = Mock(service_account_email="default")
+        with patch.dict(os.environ, {}, clear=True):
+            assert (
+                GCSStorage._resolve_signing_email(creds)
+                == "bound@proj.iam.gserviceaccount.com"
+            )
+        mock_metadata.assert_called_once()
