@@ -107,25 +107,61 @@ Read-only, against `plane-api-wl` on `plane.ledoweb.com`:
 | `level 3 rate`           | 0      | 1 real + sequence noise (below) |
 | `gateway`                | 1      | 3                               |
 
-Unit tests: `apps/api/plane/tests/unit/utils/test_search.py`, 16 cases.
+## Tests
 
-The `ledoent-build.yml` gate runs `pnpm --filter @plane/utils test` — **JS only**.
-The Python suite is not in CI, so run it deliberately:
+Two layers, and the split matters:
+
+| Suite                                   | Cases | What it can catch                       |
+| --------------------------------------- | ----- | --------------------------------------- |
+| `tests/unit/utils/test_search.py`       | 18    | the shape of the `Q` tree — no database |
+| `tests/contract/app/test_search_app.py` | 15    | the endpoints against real rows         |
+
+The unit tests alone were not enough. They pass whether or not
+`description_stripped` is ever populated, whether or not the permission filters
+still hold, and whether or not the projection leaks markup — because they never
+execute a query. The contract tests create work items through the model with
+`description_html` and drive both search endpoints, so they exercise the
+stripping, the scoping and the SQL.
+
+They also cover what must **not** change: titles still match, markup is not
+matchable, a bare number still resolves to its work item, another tenant's
+matching work item stays invisible, and a project the caller has left is not
+searched. The last two matter because this change widens the searched surface,
+and widening what is _searched_ must not widen what is _visible_.
+
+**Verified to have teeth.** Against stock `v1.4.0`, nine of the fifteen contract
+tests fail and six pass — the six being exactly the ones guarding unchanged
+behaviour.
+
+### Running them
+
+The `ledoent-build.yml` gate runs `pnpm --filter @plane/utils test` — **JS
+only**. The Python suite is not in CI, so run it deliberately. The unit tests
+need no database; the contract tests need Postgres, and create and drop their
+own `test_plane` on it.
 
 ```sh
 cd apps/api
-docker run --rm -v "$PWD":/work -w /work \
-  -e REDIS_URL=redis://localhost:6379/ \
-  -e DATABASE_URL=postgresql://plane:plane@localhost:5432/plane \
+docker run --rm --network plane-review_default -v "$PWD":/work -w /work \
+  -e REDIS_URL=redis://review-redis:6379/ \
+  -e DATABASE_URL=postgresql://plane:plane@review-db:5432/plane \
   -e SECRET_KEY=test-secret-key \
   makeplane/plane-backend:v1.4.0 sh -c \
   "pip install -q pytest==9.0.3 pytest-django==4.12.0 factory-boy==3.3.0; \
-   python -m pytest plane/tests/unit/utils/test_search.py -q"
+   python -m pytest plane/tests/unit/utils/test_search.py \
+                    plane/tests/contract/app/test_search_app.py -q --create-db"
 ```
 
 The production image ships without pytest and the settings module reads
-`REDIS_URL` at import, hence the env vars — the tests themselves touch no
-database.
+`REDIS_URL` at import, hence the env vars. Two traps worth knowing: the mounted
+source path must be one Docker Desktop shares — **`/private/tmp` is not**, and
+mounting from there silently yields an empty directory rather than an error —
+and `--create-db` avoids reusing a stale `test_plane` from an earlier run.
+
+The local review stack ships `run-search-tests.sh` (with a `--stock` mode that
+reruns the contract tests against `feat/worklogs` in a throwaway worktree) and
+`compare-stacks.sh`, which runs the same queries against both live stacks on the
+restored production data.
 
 ## The backend fix alone does nothing in the UI
 
