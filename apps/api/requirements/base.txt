@@ -75,4 +75,5 @@ opentelemetry-exporter-otlp-proto-grpc==1.28.1
 drf-spectacular==0.29.0
 # html sanitizer
 nh3==0.2.18
+# Native GCS storage backend (keyless via Workload Identity); see plane/settings/storage.py
 google-cloud-storage==2.19.0
