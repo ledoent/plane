@@ -229,6 +229,24 @@ def _metadata_service_account_email():
     return urllib.request.urlopen(req, timeout=5).read().decode().strip()
 
 
+# Credentials and the signing identity are resolved once per process, not once
+# per instance. Views construct a storage object inside the request handler, so
+# anything done in __init__ runs on every request — and under Workload Identity
+# resolving the signing identity means a blocking call to the metadata server.
+# The credentials object refreshes its own token in place, so caching it is safe
+# and the refresh in _signing() still applies.
+_GCS_CREDENTIALS_CACHE = {}
+
+
+def _gcs_credentials():
+    """Process-wide ADC credentials plus the email IAM signBlob signs as."""
+    if not _GCS_CREDENTIALS_CACHE:
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        _GCS_CREDENTIALS_CACHE["creds"] = creds
+        _GCS_CREDENTIALS_CACHE["email"] = GCSStorage._resolve_signing_email(creds)
+    return _GCS_CREDENTIALS_CACHE["creds"], _GCS_CREDENTIALS_CACHE["email"]
+
+
 class GCSStorage(GoogleCloudStorage):
     """Native Google Cloud Storage backend, keyless via Workload Identity.
 
@@ -253,13 +271,12 @@ class GCSStorage(GoogleCloudStorage):
             file_overwrite=False,
             **kwargs,
         )
-        self._gclient = _gcs.Client(project=self._project_id)
+        # Credentials come from the process-wide cache; see _gcs_credentials.
+        # Reuse them for the client too, so constructing it does not repeat ADC
+        # discovery on every request.
+        self._creds, self._signing_email = _gcs_credentials()
+        self._gclient = _gcs.Client(project=self._project_id, credentials=self._creds)
         self._gbucket = self._gclient.bucket(self._bucket_name)
-        # Resolve credentials + the signing identity once, then refresh the
-        # token lazily in _signing(). Avoids re-running ADC discovery and a
-        # token refresh on every presigned URL.
-        self._creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-        self._signing_email = self._resolve_signing_email(self._creds)
 
     @staticmethod
     def _resolve_signing_email(creds):
@@ -354,7 +371,9 @@ class GCSStorage(GoogleCloudStorage):
             return True
         except Exception as e:  # noqa: BLE001
             log_exception(e)
-            return None
+            # False, not None: the S3 backend returns False here and callers
+            # should not have to know which backend they are talking to.
+            return False
 
 
 # Views do `from plane.settings.storage import S3Storage`; swap the symbol so
