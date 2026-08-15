@@ -204,3 +204,151 @@ class TestS3StorageSignedURLExpiration:
         mock_s3_client.generate_presigned_url.assert_called_once()
         call_kwargs = mock_s3_client.generate_presigned_url.call_args[1]
         assert call_kwargs["ExpiresIn"] == 120
+
+
+@pytest.mark.unit
+class TestContentDisposition:
+    """Shared RFC 5987 Content-Disposition helper used by both backends."""
+
+    def test_encodes_given_filename(self):
+        from plane.settings.storage import _content_disposition
+
+        assert _content_disposition("attachment", "my report.pdf") == "attachment; filename*=UTF-8''my%20report.pdf"
+
+    def test_defaults_to_random_filename_when_missing(self):
+        from plane.settings.storage import _content_disposition
+
+        value = _content_disposition("inline")
+        assert value.startswith("inline; filename*=UTF-8''")
+        # a uuid4 hex (32 chars) is used when no filename is supplied
+        assert len(value.split("''", 1)[1]) == 32
+
+
+@pytest.mark.unit
+class TestGCSSigningEmailResolution:
+    """The signing identity is where the subtle Workload Identity 'default' bug
+    lives: signing as "default" is an IAM 400, so resolution must not accept it."""
+
+    def test_explicit_env_override_wins(self):
+        from plane.settings.storage import GCSStorage
+
+        creds = Mock(service_account_email="adc@proj.iam.gserviceaccount.com")
+        with patch.dict(os.environ, {"GS_SIGNING_SA": "explicit@proj.iam.gserviceaccount.com"}):
+            assert GCSStorage._resolve_signing_email(creds) == "explicit@proj.iam.gserviceaccount.com"
+
+    def test_uses_adc_identity_when_no_override(self):
+        from plane.settings.storage import GCSStorage
+
+        creds = Mock(service_account_email="adc@proj.iam.gserviceaccount.com")
+        with patch.dict(os.environ, {}, clear=True):
+            assert GCSStorage._resolve_signing_email(creds) == "adc@proj.iam.gserviceaccount.com"
+
+    @patch(
+        "plane.settings.storage._metadata_service_account_email",
+        return_value="bound@proj.iam.gserviceaccount.com",
+    )
+    def test_falls_back_to_metadata_when_default(self, mock_metadata):
+        from plane.settings.storage import GCSStorage
+
+        creds = Mock(service_account_email="default")
+        with patch.dict(os.environ, {}, clear=True):
+            assert GCSStorage._resolve_signing_email(creds) == "bound@proj.iam.gserviceaccount.com"
+        mock_metadata.assert_called_once()
+
+
+@pytest.mark.unit
+class TestGCSCredentialCaching:
+    """Credentials resolve once per process, not once per request.
+
+    Views construct a storage object inside the request handler, so anything
+    done in __init__ runs per request — and under Workload Identity resolving
+    the signing identity means a blocking call to the metadata server.
+    """
+
+    def setup_method(self):
+        from plane.settings import storage
+
+        storage._GCS_CREDENTIALS_CACHE.clear()
+
+    teardown_method = setup_method
+
+    @patch("plane.settings.storage.google.auth.default")
+    def test_adc_discovery_runs_once_across_calls(self, mock_default):
+        from plane.settings.storage import _gcs_credentials
+
+        mock_default.return_value = (Mock(service_account_email="sa@proj.iam.gserviceaccount.com"), "proj")
+
+        first_creds, first_email = _gcs_credentials()
+        second_creds, second_email = _gcs_credentials()
+
+        mock_default.assert_called_once()
+        assert first_creds is second_creds
+        assert first_email == second_email == "sa@proj.iam.gserviceaccount.com"
+
+    @patch("plane.settings.storage._metadata_service_account_email")
+    @patch("plane.settings.storage.google.auth.default")
+    def test_metadata_server_is_not_polled_per_call(self, mock_default, mock_metadata):
+        """The Workload Identity path is the expensive one — pin it explicitly."""
+        from plane.settings.storage import _gcs_credentials
+
+        mock_default.return_value = (Mock(service_account_email="default"), "proj")
+        mock_metadata.return_value = "bound@proj.iam.gserviceaccount.com"
+
+        for _ in range(3):
+            _, email = _gcs_credentials()
+            assert email == "bound@proj.iam.gserviceaccount.com"
+
+        mock_metadata.assert_called_once()
+
+
+@pytest.mark.unit
+class TestBackendSelection:
+    """USE_GCS rebinds the S3Storage symbol; the whole app depends on it."""
+
+    def test_gcs_is_not_selected_by_default(self):
+        import importlib
+
+        from plane.settings import storage
+
+        with patch.dict(os.environ, {}, clear=True):
+            reloaded = importlib.reload(storage)
+            assert reloaded.S3Storage is reloaded.S3Boto3Storage.__subclasses__()[0] or issubclass(
+                reloaded.S3Storage, reloaded.S3Boto3Storage
+            )
+            assert not issubclass(reloaded.S3Storage, reloaded.GoogleCloudStorage)
+
+    def test_use_gcs_swaps_the_symbol(self):
+        import importlib
+
+        from plane.settings import storage
+
+        with patch.dict(os.environ, {"USE_GCS": "1"}):
+            reloaded = importlib.reload(storage)
+            assert reloaded.S3Storage is reloaded.GCSStorage
+
+        # Restore the module for any test importing it afterwards.
+        with patch.dict(os.environ, {}, clear=True):
+            importlib.reload(storage)
+
+    def test_other_values_do_not_enable_gcs(self):
+        import importlib
+
+        from plane.settings import storage
+
+        for value in ("0", "true", "yes", ""):
+            with patch.dict(os.environ, {"USE_GCS": value}):
+                reloaded = importlib.reload(storage)
+                assert reloaded.S3Storage is not reloaded.GCSStorage, value
+
+        with patch.dict(os.environ, {}, clear=True):
+            importlib.reload(storage)
+
+    def test_delete_files_reports_failure_as_false_like_s3(self):
+        """Callers should not need to know which backend they are talking to."""
+        from plane.settings.storage import GCSStorage
+
+        gcs = GCSStorage.__new__(GCSStorage)
+        gcs._gbucket = Mock()
+        gcs._gbucket.delete_blobs.side_effect = RuntimeError("boom")
+
+        assert GCSStorage.delete_files(gcs, ["a", "b"]) is False

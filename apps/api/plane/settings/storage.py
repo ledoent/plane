@@ -5,15 +5,31 @@
 # Python imports
 import os
 import uuid
+from datetime import timedelta
+from urllib.parse import quote
 
 # Third party imports
 import boto3
 from botocore.exceptions import ClientError
-from urllib.parse import quote
+import google.auth
+from google.auth.transport import requests as _google_requests
+from google.cloud import storage as _gcs
 
 # Module imports
 from plane.utils.exception_logger import log_exception
+from storages.backends.gcloud import GoogleCloudStorage
 from storages.backends.s3boto3 import S3Boto3Storage
+
+
+def _content_disposition(disposition, filename=None):
+    """Build an RFC 5987-encoded Content-Disposition header value.
+
+    Shared by the S3 and GCS backends. When no filename is given a random one is
+    used, matching the presigned-download behaviour Plane relies on.
+    """
+    if filename is None:
+        filename = uuid.uuid4().hex
+    return f"{disposition}; filename*=UTF-8''{quote(filename)}"
 
 
 class S3Storage(S3Boto3Storage):
@@ -100,14 +116,7 @@ class S3Storage(S3Boto3Storage):
 
     def _get_content_disposition(self, disposition, filename=None):
         """Helper method to generate Content-Disposition header value"""
-        if filename is None:
-            filename = uuid.uuid4().hex
-
-        if filename:
-            # Encode the filename to handle special characters
-            encoded_filename = quote(filename)
-            return f"{disposition}; filename*=UTF-8''{encoded_filename}"
-        return disposition
+        return _content_disposition(disposition, filename)
 
     def generate_presigned_url(
         self,
@@ -203,3 +212,171 @@ class S3Storage(S3Boto3Storage):
         except ClientError as e:
             log_exception(e)
             return False
+
+
+def _metadata_service_account_email():
+    """The bound service-account email from the GCE/GKE metadata server.
+
+    Last-resort for signing when the ADC credentials don't expose the identity
+    directly (Workload Identity credentials report the literal "default").
+    """
+    import urllib.request
+
+    req = urllib.request.Request(
+        "http://metadata/computeMetadata/v1/instance/service-accounts/default/email",
+        headers={"Metadata-Flavor": "Google"},
+    )
+    return urllib.request.urlopen(req, timeout=5).read().decode().strip()
+
+
+# Credentials and the signing identity are resolved once per process, not once
+# per instance. Views construct a storage object inside the request handler, so
+# anything done in __init__ runs on every request — and under Workload Identity
+# resolving the signing identity means a blocking call to the metadata server.
+# The credentials object refreshes its own token in place, so caching it is safe
+# and the refresh in _signing() still applies.
+_GCS_CREDENTIALS_CACHE = {}
+
+
+def _gcs_credentials():
+    """Process-wide ADC credentials plus the email IAM signBlob signs as."""
+    if not _GCS_CREDENTIALS_CACHE:
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        _GCS_CREDENTIALS_CACHE["creds"] = creds
+        _GCS_CREDENTIALS_CACHE["email"] = GCSStorage._resolve_signing_email(creds)
+    return _GCS_CREDENTIALS_CACHE["creds"], _GCS_CREDENTIALS_CACHE["email"]
+
+
+class GCSStorage(GoogleCloudStorage):
+    """Native Google Cloud Storage backend, keyless via Workload Identity.
+
+    Reads/writes use Application Default Credentials (the pod's bound service
+    account). Presigned upload POST policies and download URLs are signed
+    through the IAM signBlob API, so NO service-account key is ever needed.
+    Mirrors the S3Storage interface; the module swaps ``S3Storage`` for this
+    class when ``USE_GCS=1`` so the views are unchanged. The class is always
+    defined (not gated on the env var) so it stays importable for tests.
+    """
+
+    def __init__(self, request=None, **kwargs):
+        self._request = request
+        self.signed_url_expiration = int(os.environ.get("SIGNED_URL_EXPIRATION", "3600"))
+        self._bucket_name = os.environ.get("GS_BUCKET_NAME") or os.environ.get("AWS_S3_BUCKET_NAME")
+        self._project_id = os.environ.get("GS_PROJECT_ID")
+        super().__init__(
+            bucket_name=self._bucket_name,
+            project_id=self._project_id,
+            default_acl=None,
+            querystring_auth=False,
+            file_overwrite=False,
+            **kwargs,
+        )
+        # Credentials come from the process-wide cache; see _gcs_credentials.
+        # Reuse them for the client too, so constructing it does not repeat ADC
+        # discovery on every request.
+        self._creds, self._signing_email = _gcs_credentials()
+        self._gclient = _gcs.Client(project=self._project_id, credentials=self._creds)
+        self._gbucket = self._gclient.bucket(self._bucket_name)
+
+    @staticmethod
+    def _resolve_signing_email(creds):
+        """Service account IAM signBlob signs as. An explicit GS_SIGNING_SA
+        wins; else the ADC identity — but Workload Identity credentials report
+        the literal "default" until refreshed, and signing as "default" is an
+        IAM 400, so fall back to the metadata server."""
+        email = os.environ.get("GS_SIGNING_SA") or getattr(creds, "service_account_email", None)
+        if not email or email == "default":
+            try:
+                email = _metadata_service_account_email()
+            except Exception as e:  # noqa: BLE001
+                log_exception(e)
+                email = None
+        return email
+
+    def _signing(self):
+        """Keyless IAM signBlob params: the signing SA email + a fresh token."""
+        if not self._creds.valid:
+            self._creds.refresh(_google_requests.Request())
+        return {"service_account_email": self._signing_email, "access_token": self._creds.token}
+
+    # Plane addresses objects by key and never uses the default-storage URL.
+    def url(self, name, parameters=None, expire=None, http_method=None):
+        return name
+
+    def generate_presigned_post(self, object_name, file_type, file_size, expiration=None):
+        exp = timedelta(seconds=expiration or self.signed_url_expiration)
+        conditions = [["content-length-range", 1, file_size], {"Content-Type": file_type}]
+        fields = {"Content-Type": file_type}
+        try:
+            # generate_signed_post_policy_v4 lives on the Client (and takes the
+            # bucket name), not on the Bucket object.
+            policy = self._gclient.generate_signed_post_policy_v4(
+                self._bucket_name, object_name, expiration=exp,
+                conditions=conditions, fields=fields, **self._signing(),
+            )
+            return {"url": policy["url"], "fields": policy["fields"]}
+        except Exception as e:  # noqa: BLE001
+            log_exception(e)
+            return None
+
+    def generate_presigned_url(self, object_name, expiration=None, http_method="GET",
+                               disposition="inline", filename=None):
+        exp = timedelta(seconds=expiration or self.signed_url_expiration)
+        try:
+            blob = self._gbucket.blob(str(object_name))
+            return blob.generate_signed_url(
+                version="v4", expiration=exp, method=http_method,
+                response_disposition=_content_disposition(disposition, filename),
+                **self._signing(),
+            )
+        except Exception as e:  # noqa: BLE001
+            log_exception(e)
+            return None
+
+    def get_object_metadata(self, object_name):
+        try:
+            blob = self._gbucket.blob(object_name)
+            blob.reload()
+            return {
+                "ContentType": blob.content_type,
+                "ContentLength": blob.size,
+                "LastModified": blob.updated.isoformat() if blob.updated else None,
+                "ETag": blob.etag,
+                "Metadata": blob.metadata or {},
+            }
+        except Exception as e:  # noqa: BLE001
+            log_exception(e)
+            return None
+
+    def copy_object(self, object_name, new_object_name):
+        try:
+            self._gbucket.copy_blob(self._gbucket.blob(object_name), self._gbucket, new_object_name)
+            return True
+        except Exception as e:  # noqa: BLE001
+            log_exception(e)
+            return None
+
+    def upload_file(self, file_obj, object_name, content_type=None, extra_args={}):
+        try:
+            blob = self._gbucket.blob(object_name)
+            blob.upload_from_file(file_obj, content_type=content_type)
+            return True
+        except Exception as e:  # noqa: BLE001
+            log_exception(e)
+            return False
+
+    def delete_files(self, object_names):
+        try:
+            self._gbucket.delete_blobs([self._gbucket.blob(n) for n in object_names])
+            return True
+        except Exception as e:  # noqa: BLE001
+            log_exception(e)
+            # False, not None: the S3 backend returns False here and callers
+            # should not have to know which backend they are talking to.
+            return False
+
+
+# Views do `from plane.settings.storage import S3Storage`; swap the symbol so
+# the whole app uses native GCS when it is turned on.
+if os.environ.get("USE_GCS") == "1":
+    S3Storage = GCSStorage
