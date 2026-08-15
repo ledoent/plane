@@ -99,6 +99,10 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.staticfiles",
+    # Registers the tsvector and trigram field/index types used by
+    # plane.utils.search — required by the search_vector GeneratedField on
+    # Issue/Page and the GIN indexes in migration 0124.
+    "django.contrib.postgres",
     # Inhouse apps
     "plane.analytics",
     "plane.app",

@@ -39,11 +39,19 @@ The obvious reflex — and Typesense is already the house standard here, running
 in `duropc-production`, `duropc-staging` and `huly` with a 6-hourly reindex
 CronJob. It is the right engine if an engine is needed.
 
-It isn't, yet. **Plane holds 65 issues.** A Typesense deployment would cost a
-10Gi `hcloud-volumes` PVC — the same shape duropc's uses — and the cluster sits
-at **47 of 48** Hetzner volumes, the exact constraint
-`infra/deployments/plane/README.md` was written around. Against 65 documents a
-Postgres `icontains` is instant and stays instant well into the thousands.
+It isn't, yet — though **the original reasoning is obsolete and the conclusion
+now survives for different reasons.**
+
+As first written this was a volume-budget argument: a 10Gi `hcloud-volumes` PVC
+against a Hetzner cluster sitting at 47 of 48 volumes. Plane moved to GKE
+(`gke_meas-inst-prod_us-east1-b_meas-apps`) on 2026-08-15 and that ceiling is
+gone — PVCs are `standard-rwo` on `pd.csi.storage.gke.io`, dynamically
+provisioned, no fixed count.
+
+What still holds is scale. **Plane holds 70 issues** (measured 2026-08-15).
+Against a corpus that size a Postgres `icontains` is instant and stays instant
+well into the thousands. An engine buys nothing measurable here and costs a
+second stateful component to run, back up and reindex.
 
 Revisit when **any** of these becomes true:
 
@@ -51,9 +59,15 @@ Revisit when **any** of these becomes true:
 - results need to span comments, attachments and pages in one ranked list
 - typo tolerance, stemming or relevance ranking is actually wanted
 
-At that point copy the duropc `Deployment` + reindex `CronJob` wholesale. An
-index is rebuildable by definition, so it can sit on `local-path` like Valkey
-and RabbitMQ rather than consuming the last hcloud volume.
+The third bullet is now reachable **without** an engine — see "Postgres
+full-text as the next step". Outline runs stemming, ranking and highlighted
+snippets on the same Postgres instance this fork already uses, so wanting
+quality no longer implies Typesense. Reach for an engine on the first two
+bullets, not the third.
+
+If an engine is ever wanted, copy the duropc `Deployment` + reindex `CronJob`
+wholesale. An index is rebuildable by definition, so it can sit on the default
+`standard-rwo` class without ceremony.
 
 Note also that upstream's own answer is **OpenSearch**, and it is **Pro edition
 and above** — see [Configure OpenSearch for advanced
@@ -228,19 +242,116 @@ no longer reaches issue #22 by number. That is deliberate, and it is why it
 sits in its own commit — the tokenization commit stays cherry-pickable alone if
 upstream would rather not narrow anything.
 
-## Deploying
+## Postgres full-text as the next step
 
-`ledoent-build.yml` triggers on push to `feat/worklogs` only. This branch
-builds via `workflow_dispatch` with an explicit tag, or merge to
-`feat/worklogs` first. Then the usual:
+Everything above is substring matching. It answers _does this string occur_,
+which leaves two gaps that no amount of tokenizing fixes:
 
-```sh
-helm upgrade plane /tmp/plane-helm/charts/plane-ce -n plane \
-  -f values.yaml -f values.secret.yaml --set planeVersion=<tag>
+- **No stemming.** "migrating" does not find a body that says "migrate".
+- **No ranking.** Thirty matches come back in planner order, so nothing useful
+  is first.
+
+Measured on the live Outline corpus, which runs Postgres full-text on the same
+database server:
+
+```
+websearch_to_tsquery('english','migrating')  ->  10 documents
+ILIKE '%migrating%'                          ->   0 documents
 ```
 
-and write the tag into `infra/deployments/plane/values.yaml` so file and
-cluster agree.
+`feat/search-ranking` closes both by copying what Outline does — a stored
+`tsvector`, a GIN index, and `ts_rank_cd` ordering — without adding a service.
+
+### What it adds
+
+A `search_vector` generated column on `Issue` and `Page`, weighted
+`setweight(name,'A') || setweight(description_stripped,'B')`, plus a GIN index
+on it and a GIN **trigram** index on `name`.
+
+It is a `GeneratedField`, not a trigger and not a `save()` assignment.
+`description_stripped` is only written in `Model.save()`, so a `.update()`
+leaves it stale; a generated column is recomputed by Postgres from whatever is
+in the row and cannot drift. Verified on PG16:
+
+| Property                                    | Result                   |
+| ------------------------------------------- | ------------------------ |
+| Expression accepted as `STORED` (immutable) | yes                      |
+| `migrating` reaches a body saying `migrate` | yes                      |
+| Title hit vs body hit rank                  | `1.000000` vs `0.400000` |
+| Bulk `UPDATE` reflected without `save()`    | yes                      |
+
+### Why it stays hybrid
+
+Full-text **alone would be a regression**. `tsquery` matches whole lexemes, so
+a partial token stops matching. Measured on the same fixtures:
+
+```
+search "socket"   tsquery -> 0 rows      ILIKE -> 1 row  ("socketlabs")
+```
+
+So the predicate is the union of both, and `ts_rank_cd` orders the union.
+Substring-only hits score `0.0` and sort last, but they are still returned.
+The rule this preserves: **no query that returned a row before returns fewer
+rows now.**
+
+### Rollback
+
+Unlike the substring work, this one carries a migration. Reverting the image
+alone is not enough — the generated column and its indexes stay behind, which
+is harmless (nothing reads them) but should be reversed with the migration if
+the change is abandoned.
+
+## Deploying
+
+> **Superseded 2026-08-15.** This section previously described the Hetzner
+> deployment — a helm chart under `/tmp/plane-helm`, tags written into
+> `infra/deployments/plane/values.yaml`, and images from Zot. Plane has moved
+> to GKE and **none of that applies**. The `plane` namespace no longer exists
+> on `hetzner-ledo`.
+
+Plane runs on **`gke_meas-inst-prod_us-east1-b_meas-apps`**, namespace `plane`,
+helm release `plane` (chart `plane-ce-1.6.2`). Images come from **Artifact
+Registry**, not Zot:
+
+```
+us-east1-docker.pkg.dev/meas-inst-prod/containers/plane-{backend,frontend,admin,live,space}
+```
+
+Chart values live in the measinst infra repo, not this one — see
+`measinst/infra/apps/plane/` (`values.yaml` committed, `values.secret.yaml`
+gitignored). Deploy with an explicit kube-context:
+
+```sh
+helm --kube-context gke_meas-inst-prod_us-east1-b_meas-apps \
+  upgrade --install plane ~/projects/ledoent/plane-helm-charts/charts/plane-ce -n plane \
+  -f apps/plane/values.yaml -f apps/plane/values.secret.yaml \
+  --set planeVersion=<tag>
+```
+
+**The aggregate is now adopted.** `repos.yaml` was written up but unadopted
+when this doc was first drafted, and the deployment ran a _split_ — different
+tags per component, which is how the backend once ran an image predating
+`plane/utils/search.py` while the frontend already had the palette fix. Search
+appeared dead because only half of it was deployed.
+
+All seven components now run one tag built from `deploy/measinst`:
+
+```
+v1.4.0-worklogs-agg-65eeb414ec
+```
+
+Verify the halves agree before debugging a search complaint:
+
+```sh
+kubectl --context gke_meas-inst-prod_us-east1-b_meas-apps -n plane \
+  get deploy -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image'
+# every row should carry the same tag
+kubectl --context gke_meas-inst-prod_us-east1-b_meas-apps -n plane \
+  exec deploy/plane-api-wl -- ls plane/utils/search.py
+# absent => backend predates the search helper, body search cannot work
+```
 
 **Rollback is safe.** No schema change, no data migration — reverting to an
-earlier image restores the old search behaviour with nothing to undo.
+earlier image restores the old search behaviour with nothing to undo. That
+stops being true once the `search_vector` work below lands, which _does_ carry
+a migration.

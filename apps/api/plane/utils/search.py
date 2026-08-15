@@ -6,7 +6,8 @@
 import re
 
 # Django imports
-from django.db.models import Q
+from django.contrib.postgres.search import SearchQuery, SearchRank
+from django.db.models import F, Q
 
 # Match whole integers only. The lookaround excludes the components of a
 # decimal: a plain \b\d+\b treats the dot in "3.5" as a word boundary and
@@ -107,3 +108,96 @@ def build_search_query(query, fields, sequence_fields=(), sequence_query_max_len
         return text_query | sequence_query
 
     return text_query
+
+
+# ---------------------------------------------------------------------------
+# Full-text ranking
+# ---------------------------------------------------------------------------
+
+# Postgres text-search configuration. English stemming is what makes
+# "migrating" match a body that says "migrate" — measured on live data, that
+# single difference was 10 documents found versus 0.
+SEARCH_CONFIG = "english"
+
+
+def build_search_vector_query(query):
+    """Return a ``SearchQuery`` for ``query``, or ``None`` if it is empty.
+
+    Uses ``websearch`` rather than ``plain``: it accepts quoted phrases, ``or``
+    and ``-exclusion`` from users who expect web-search syntax, and — unlike
+    ``raw`` — never raises on malformed input, so a stray quote degrades to a
+    plain match instead of a 500.
+    """
+    if not query or not query.strip():
+        return None
+    return SearchQuery(query, config=SEARCH_CONFIG, search_type="websearch")
+
+
+def add_search_rank(queryset, query, vector_field="search_vector"):
+    """Annotate ``queryset`` with ``search_rank`` and order by it.
+
+    Ranking is the half that substring matching cannot provide at all. Before
+    this, results came back in whatever order the planner produced, so a query
+    matching thirty work items put no useful one first.
+
+    Rows that match only via the substring predicate — partial tokens that no
+    stemmer will reach, such as "socket" inside "socketlabs" — score 0.0 from
+    ``SearchRank`` and sort last, behind every full-text hit. They are still
+    returned; recall is never traded for ranking.
+
+    ``ts_rank_cd`` (cover density) is used rather than ``ts_rank`` because it
+    accounts for how close the matched lexemes sit to one another, which is
+    what makes a phrase hit outrank a document that merely contains the same
+    words in unrelated paragraphs.
+    """
+    search_query = build_search_vector_query(query)
+    if search_query is None:
+        return queryset
+    return queryset.annotate(
+        search_rank=SearchRank(F(vector_field), search_query, cover_density=True)
+    ).order_by("-search_rank")
+
+
+def build_full_text_query(query, vector_field="search_vector"):
+    """Return a ``Q`` matching ``query`` against the stored tsvector.
+
+    Returns an empty ``Q()`` for an empty query, matching
+    ``build_search_query``'s contract that "no term supplied" filters nothing.
+    """
+    search_query = build_search_vector_query(query)
+    if search_query is None:
+        return Q()
+    return Q(**{vector_field: search_query})
+
+
+def build_hybrid_search_query(
+    query,
+    fields,
+    sequence_fields=(),
+    sequence_query_max_length=None,
+    vector_field="search_vector",
+):
+    """Union of full-text and substring matching.
+
+    Full-text alone would be a regression, not an upgrade. ``tsquery`` matches
+    whole lexemes, so a partial token stops matching: searching "socket" finds
+    nothing in a body that says "socketlabs", which the existing ``icontains``
+    handles. Substring alone gives no stemming and no ranking.
+
+    OR-ing them keeps every result either approach would have returned, and
+    ``add_search_rank`` then orders the union so the stemmed, well-covered hits
+    lead. This is deliberately a superset of the previous behaviour: no query
+    that returned a row before returns fewer rows now.
+    """
+    substring = build_search_query(
+        query,
+        fields=fields,
+        sequence_fields=sequence_fields,
+        sequence_query_max_length=sequence_query_max_length,
+    )
+    full_text = build_full_text_query(query, vector_field=vector_field)
+    if not full_text:
+        return substring
+    if not substring:
+        return full_text
+    return substring | full_text
