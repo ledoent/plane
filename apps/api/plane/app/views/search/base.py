@@ -36,6 +36,8 @@ from plane.utils.search import (
     USER_MENTION_SEARCH_FIELDS,
     VIEW_SEARCH_FIELDS,
     WORKSPACE_SEARCH_FIELDS,
+    add_search_rank,
+    build_hybrid_search_query,
     build_search_query,
 )
 from plane.db.models import (
@@ -82,7 +84,10 @@ class GlobalSearchEndpoint(BaseAPIView):
         )
 
     def filter_issues(self, query, slug, project_id, workspace_search):
-        q = build_search_query(
+        # Hybrid: stored tsvector OR substring. Full-text alone would drop
+        # partial tokens ("socket" inside "socketlabs"); substring alone gives
+        # no stemming and no ranking. See plane.utils.search.
+        q = build_hybrid_search_query(
             query,
             fields=ISSUE_SEARCH_FIELDS,
             sequence_fields=ISSUE_SEQUENCE_FIELDS,
@@ -99,14 +104,20 @@ class GlobalSearchEndpoint(BaseAPIView):
         if workspace_search == "false" and project_id:
             issues = issues.filter(project_id=project_id)
 
-        return issues.distinct().values(
-            "name",
-            "id",
-            "sequence_id",
-            "project__identifier",
-            "project_id",
-            "workspace__slug",
-        )[:100]
+        # Rank before the slice: capping an unordered set keeps an arbitrary
+        # 100 rows, not the best 100.
+        return (
+            add_search_rank(issues, query)
+            .distinct()
+            .values(
+                "name",
+                "id",
+                "sequence_id",
+                "project__identifier",
+                "project_id",
+                "workspace__slug",
+            )[:100]
+        )
 
     def filter_cycles(self, query, slug, project_id, workspace_search):
         q = build_search_query(query, fields=CYCLE_SEARCH_FIELDS)
@@ -149,7 +160,7 @@ class GlobalSearchEndpoint(BaseAPIView):
         )
 
     def filter_pages(self, query, slug, project_id, workspace_search):
-        q = build_search_query(query, fields=PAGE_SEARCH_FIELDS)
+        q = build_hybrid_search_query(query, fields=PAGE_SEARCH_FIELDS)
 
         pages = (
             Page.objects.filter(

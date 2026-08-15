@@ -5,10 +5,13 @@
 import uuid
 
 from django.conf import settings
+from django.contrib.postgres.search import SearchVector, SearchVectorField
 from django.utils import timezone
 
 # Django imports
 from django.db import models
+from django.db.models import Value
+from django.db.models.functions import Coalesce
 
 # Module imports
 from plane.utils.html_processor import strip_tags
@@ -33,6 +36,22 @@ class Page(BaseModel):
     description_binary = models.BinaryField(null=True)
     description_html = models.TextField(blank=True, default="<p></p>")
     description_stripped = models.TextField(blank=True, null=True)
+    # See Issue.search_vector — same weighting (title A, body B), same reason
+    # for being a generated column rather than maintained in save().
+    search_vector = models.GeneratedField(
+        expression=SearchVector(
+            Coalesce("name", Value(""), output_field=models.TextField()),
+            weight="A",
+            config="english",
+        )
+        + SearchVector(
+            Coalesce("description_stripped", Value(""), output_field=models.TextField()),
+            weight="B",
+            config="english",
+        ),
+        output_field=SearchVectorField(null=True),
+        db_persist=True,
+    )
     owned_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="pages")
     access = models.PositiveSmallIntegerField(choices=((0, "Public"), (1, "Private")), default=0)
     color = models.CharField(max_length=255, blank=True)
