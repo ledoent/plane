@@ -117,10 +117,9 @@ def test_malformed_query_does_not_error(corpus, project):
 
 
 @pytest.mark.django_db
-def test_global_search_endpoint_ranks(client, create_user, workspace, corpus):
+def test_global_search_endpoint_ranks(session_client, workspace, corpus):
     """The wiring, not just the helper: the endpoint returns ranked issues."""
-    client.force_authenticate(user=create_user)
-    response = client.get(
+    response = session_client.get(
         GLOBAL_SEARCH.format(slug=workspace.slug),
         {"search": "deliverability", "workspace_search": "true"},
     )

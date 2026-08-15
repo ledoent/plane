@@ -146,8 +146,16 @@ class Issue(ChangeTrackerMixin, ProjectBaseModel):
     # from its inputs, and it survives the bulk updates that already bypass the
     # description_stripped assignment below. Queried via plane.utils.search.
     search_vector = models.GeneratedField(
-        expression=SearchVector(Coalesce("name", Value("")), weight="A", config="english")
-        + SearchVector(Coalesce("description_stripped", Value("")), weight="B", config="english"),
+        expression=SearchVector(
+            Coalesce("name", Value(""), output_field=models.TextField()),
+            weight="A",
+            config="english",
+        )
+        + SearchVector(
+            Coalesce("description_stripped", Value(""), output_field=models.TextField()),
+            weight="B",
+            config="english",
+        ),
         output_field=SearchVectorField(null=True),
         db_persist=True,
     )

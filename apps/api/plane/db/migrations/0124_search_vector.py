@@ -36,10 +36,17 @@ from django.db.models.functions import Coalesce
 
 def _vector():
     """Weighted tsvector over title (A) and body (B)."""
+    # output_field is required: `name` is a CharField on Issue but a TextField
+    # on Page, and Value("") infers TextField, so Django refuses to combine them
+    # without being told the result type.
     return django.contrib.postgres.search.SearchVector(
-        Coalesce("name", Value("")), weight="A", config="english"
+        Coalesce("name", Value(""), output_field=models.TextField()),
+        weight="A",
+        config="english",
     ) + django.contrib.postgres.search.SearchVector(
-        Coalesce("description_stripped", Value("")), weight="B", config="english"
+        Coalesce("description_stripped", Value(""), output_field=models.TextField()),
+        weight="B",
+        config="english",
     )
 
 

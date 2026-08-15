@@ -39,8 +39,16 @@ class Page(BaseModel):
     # See Issue.search_vector — same weighting (title A, body B), same reason
     # for being a generated column rather than maintained in save().
     search_vector = models.GeneratedField(
-        expression=SearchVector(Coalesce("name", Value("")), weight="A", config="english")
-        + SearchVector(Coalesce("description_stripped", Value("")), weight="B", config="english"),
+        expression=SearchVector(
+            Coalesce("name", Value(""), output_field=models.TextField()),
+            weight="A",
+            config="english",
+        )
+        + SearchVector(
+            Coalesce("description_stripped", Value(""), output_field=models.TextField()),
+            weight="B",
+            config="english",
+        ),
         output_field=SearchVectorField(null=True),
         db_persist=True,
     )
