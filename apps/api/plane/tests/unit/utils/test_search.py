@@ -8,6 +8,7 @@ from django.db.models import Q
 from plane.utils.search import (
     ISSUE_SEARCH_FIELDS,
     ISSUE_SEQUENCE_FIELDS,
+    MAX_SEARCH_TOKENS,
     PAGE_SEARCH_FIELDS,
     build_search_query,
 )
@@ -112,6 +113,11 @@ class TestBuildSearchQuery:
         assert ("sequence_id", "3") not in _children(q)
         assert ("sequence_id", "5") not in _children(q)
 
+    def test_leading_dot_decimals_do_not_produce_sequence_matches(self):
+        """ ".5" is a decimal, not work item number 5."""
+        q = build_search_query(".5", fields=ISSUE_SEARCH_FIELDS, sequence_fields=ISSUE_SEQUENCE_FIELDS)
+        assert ("sequence_id", "5") not in _children(q)
+
     def test_version_strings_do_not_produce_sequence_matches(self):
         q = build_search_query(
             "v1.4.0",
@@ -142,6 +148,25 @@ class TestBuildSearchQuery:
     def test_no_sequence_fields_yields_no_sequence_leaves(self):
         q = build_search_query("22", fields=["name"])
         assert _children(q) == {("name__icontains", "22")}
+
+
+@pytest.mark.unit
+class TestTokenBudget:
+    """One predicate per token per field, so the token count has to be bounded."""
+
+    def test_tokens_at_the_limit_are_all_used(self):
+        tokens = [f"t{i}" for i in range(MAX_SEARCH_TOKENS)]
+        q = build_search_query(" ".join(tokens), fields=["name"])
+        assert len(_children(q)) == MAX_SEARCH_TOKENS
+
+    def test_tokens_beyond_the_limit_are_dropped(self):
+        tokens = [f"t{i}" for i in range(MAX_SEARCH_TOKENS + 50)]
+        q = build_search_query(" ".join(tokens), fields=["name"])
+        assert len(_children(q)) == MAX_SEARCH_TOKENS
+
+    def test_a_pathological_query_stays_bounded(self):
+        q = build_search_query(" ".join(str(i) for i in range(5000)), fields=ISSUE_SEARCH_FIELDS)
+        assert len(_children(q)) <= MAX_SEARCH_TOKENS * len(ISSUE_SEARCH_FIELDS)
 
 
 @pytest.mark.unit

@@ -12,8 +12,15 @@ from django.db.models import Q
 # decimal: a plain \b\d+\b treats the dot in "3.5" as a word boundary and
 # yields both 3 and 5, so searching a version string surfaced unrelated issues
 # by sequence id. A trailing dot that is not followed by a digit ("issue 22.")
-# is still sentence punctuation, and 22 stays matchable.
-SEQUENCE_PATTERN = re.compile(r"(?<!\d\.)\b\d+\b(?!\.\d)")
+# is still sentence punctuation, and 22 stays matchable. A digit preceded by
+# a dot is part of a decimal too — ".5" must not yield 5.
+SEQUENCE_PATTERN = re.compile(r"(?<![\d.])\b\d+\b(?!\.\d)")
+
+# Upper bound on tokens taken from one query. Every token costs one predicate
+# per searched field, so this caps the size of the SQL a single request can
+# build. Well above any real search — a dozen AND-ed words has narrowed the
+# result set to almost nothing already.
+MAX_SEARCH_TOKENS = 12
 
 # Searchable fields per entity, shared by every search endpoint so that the
 # global search, the entity search and the project issue search cannot drift
@@ -63,13 +70,19 @@ def build_search_query(query, fields, sequence_fields=(), sequence_query_max_len
     ``sequence_query_max_length`` additionally skips the lookup for tokens
     longer than the given length, so a long slug is not mined for stray digits.
 
+    Only the first ``MAX_SEARCH_TOKENS`` tokens are used. Each token adds one
+    predicate per field, so an unbounded token count would let a single request
+    build an arbitrarily large SQL expression — a cost the previous whole-query
+    ``icontains`` did not have. Ignoring the tail is safe: tokens are AND-ed, so
+    the retained ones have already narrowed the result set at least as much.
+
     An empty query returns an empty ``Q()``, which filters nothing — callers
     rely on that to mean "no search term supplied".
     """
     if not query:
         return Q()
 
-    tokens = query.split()
+    tokens = query.split()[:MAX_SEARCH_TOKENS]
     if not tokens:
         return Q()
 
