@@ -56,8 +56,12 @@ jobs:
       - name: Typecheck and lint
         run: pnpm exec turbo run check:types check:lint
 
+      # Every package that declares a test script, not just @plane/utils —
+      # otherwise a package's suite silently never gates an image. shared-state
+      # carries the filter-negation adapter round-trip, which is the check that
+      # catches a bad upstream merge degrading a NOT group to its positive form.
       - name: Unit tests
-        run: pnpm --filter @plane/utils test
+        run: pnpm exec turbo run test
 
   build:
     name: Build and push images
