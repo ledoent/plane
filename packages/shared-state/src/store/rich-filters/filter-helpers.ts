@@ -21,7 +21,16 @@ import type {
   TFilterConditionPayload,
 } from "@plane/types";
 import { LOGICAL_OPERATOR } from "@plane/types";
-import { addAndCondition, createConditionNode, updateNodeInExpression } from "@plane/utils";
+import {
+  addAndCondition,
+  createConditionNode,
+  createNotGroupNode,
+  findImmediateParent,
+  findNodeById,
+  isNegatedNode,
+  replaceNodeInExpression,
+  updateNodeInExpression,
+} from "@plane/utils";
 // local imports
 import type { IFilterInstance } from "./filter";
 
@@ -233,11 +242,13 @@ export class FilterInstanceHelper<
    */
   private _getConditionPayloadToAdd = (
     condition: TFilterConditionPayload<P, TFilterValue>,
-    _isNegation: boolean
+    isNegation: boolean
   ): TFilterExpression<P> => {
     const conditionNode = createConditionNode(condition);
 
-    return conditionNode;
+    // A negated condition is stored as a NOT group wrapping the positive condition, so the
+    // operator on the condition itself stays one the API's FilterSet actually declares.
+    return isNegation ? createNotGroupNode(conditionNode) : conditionNode;
   };
 
   /**
@@ -273,11 +284,30 @@ export class FilterInstanceHelper<
     expression: TFilterExpression<P>,
     conditionId: string,
     payload: Partial<TFilterConditionNode<P, TFilterValue>>,
-    _isNegation: boolean
+    isNegation: boolean
   ): TFilterExpression<P> | null => {
     // Update the condition with the payload
     updateNodeInExpression(expression, conditionId, payload);
 
-    return expression;
+    const parent = findImmediateParent(expression, conditionId);
+    const isCurrentlyNegated = !!parent && isNegatedNode(parent);
+
+    // Negation is unchanged - the in-place update above is all that was needed
+    if (isCurrentlyNegated === isNegation) return expression;
+
+    const conditionNode = findNodeById(expression, conditionId);
+    if (!conditionNode) return expression;
+
+    // Positive -> negative: wrap the condition in a NOT group
+    if (isNegation) {
+      const negatedNode = createNotGroupNode(conditionNode);
+      if (expression.id === conditionId) return negatedNode;
+      return replaceNodeInExpression(expression, conditionId, negatedNode);
+    }
+
+    // Negative -> positive: drop the NOT group, promoting the condition in its place
+    if (!parent) return expression;
+    if (expression.id === parent.id) return conditionNode;
+    return replaceNodeInExpression(expression, parent.id, conditionNode);
   };
 }
