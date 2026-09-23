@@ -5,6 +5,7 @@
  */
 
 import type { TFilterValue } from "../expression";
+import type { TNegatedDateOperators, TNegatedSelectOperators } from "../operators/extended";
 
 // -------- DATE FILTER OPERATORS --------
 
@@ -13,7 +14,8 @@ import type { TFilterValue } from "../expression";
  */
 export type TExtendedSupportedDateFilterOperators<_V extends TFilterValue = TFilterValue> = never;
 
-export type TExtendedAllAvailableDateFilterOperatorsForDisplay<_V extends TFilterValue = TFilterValue> = never;
+export type TExtendedAllAvailableDateFilterOperatorsForDisplay<_V extends TFilterValue = TFilterValue> =
+  TNegatedDateOperators;
 
 // -------- SELECT FILTER OPERATORS --------
 
@@ -22,4 +24,5 @@ export type TExtendedAllAvailableDateFilterOperatorsForDisplay<_V extends TFilte
  */
 export type TExtendedSupportedSelectFilterOperators<_V extends TFilterValue = TFilterValue> = never;
 
-export type TExtendedAllAvailableSelectFilterOperatorsForDisplay<_V extends TFilterValue = TFilterValue> = never;
+export type TExtendedAllAvailableSelectFilterOperatorsForDisplay<_V extends TFilterValue = TFilterValue> =
+  TNegatedSelectOperators;
