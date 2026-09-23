@@ -15,6 +15,11 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 ARG TURBO_VERSION=2.9.18
+# Bring in the root package.json first so corepack resolves the pinned
+# `packageManager` (pnpm@11.3.0). Without it corepack fetches whatever pnpm is
+# newest, and pnpm >=12 aborts under qemu-emulated linux/amd64 builds with a
+# tokio I/O driver panic.
+COPY package.json ./
 RUN corepack enable pnpm && pnpm add -g turbo@${TURBO_VERSION}
 COPY . .
 

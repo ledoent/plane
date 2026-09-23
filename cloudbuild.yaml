@@ -1,0 +1,99 @@
+# Builds the five Plane service images and pushes them to Artifact Registry,
+# which is what the GKE deployment in meas-inst-prod actually pulls from.
+#
+# This is a fork-owned file. It exists because the images have to be built on
+# real linux/amd64: the GKE nodes are amd64 and the only local Docker host is
+# an Apple Silicon Mac, where cross-building through qemu dies part-way through
+# the Node stages with `Assertion failed: errno == EEXIST (uv__io_poll)`.
+# Cloud Build runs natively in the same project, so there is no emulation and
+# no cross-project credential to hand out.
+#
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_TAG=v1.4.0-worklogs-agg-$(git rev-parse --short=10 HEAD) \
+#     --project meas-inst-prod
+#
+# Deploy the result with:
+#   helm upgrade plane <chart> -n plane -f values.yaml -f values.secret.yaml \
+#     --set planeVersion=<_TAG>
+
+substitutions:
+  _TAG: latest
+  _REG: us-east1-docker.pkg.dev/meas-inst-prod/containers
+
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 200
+  # The Dockerfiles carry a `# syntax=` directive and use `--mount=type=cache`,
+  # neither of which the legacy builder in cloud-builders/docker understands.
+  env: ["DOCKER_BUILDKIT=1"]
+
+timeout: 3600s
+
+steps:
+  # The backend builds from a narrower context: Dockerfile.api COPYs
+  # requirements.txt from the build root, so it needs apps/api as the root
+  # rather than the repository root the four Node images use.
+  - id: backend
+    name: gcr.io/cloud-builders/docker
+    dir: apps/api
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - Dockerfile.api
+      - -t
+      - ${_REG}/plane-backend:${_TAG}
+      - .
+
+  - id: live
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - apps/live/Dockerfile.live
+      - -t
+      - ${_REG}/plane-live:${_TAG}
+      - .
+
+  - id: admin
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - apps/admin/Dockerfile.admin
+      - -t
+      - ${_REG}/plane-admin:${_TAG}
+      - .
+
+  - id: space
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - apps/space/Dockerfile.space
+      - -t
+      - ${_REG}/plane-space:${_TAG}
+      - .
+
+  - id: frontend
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - apps/web/Dockerfile.web
+      - -t
+      - ${_REG}/plane-frontend:${_TAG}
+      - .
+
+# Pushed only after every build succeeds, so a failure part-way cannot leave
+# the registry holding a half-updated tag across the five services.
+images:
+  - ${_REG}/plane-backend:${_TAG}
+  - ${_REG}/plane-live:${_TAG}
+  - ${_REG}/plane-admin:${_TAG}
+  - ${_REG}/plane-space:${_TAG}
+  - ${_REG}/plane-frontend:${_TAG}
