@@ -72,7 +72,10 @@ services:
       retries: 10
 
   test-minio:
-    image: minio/minio
+    # MinIO no longer publishes community images to Docker Hub - `minio/minio` now
+    # 404s as "pull access denied", which fails the whole stack before any test runs.
+    # quay.io is their current home; pinned like every other image in this file.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     networks:
       - test_env
     env_file:

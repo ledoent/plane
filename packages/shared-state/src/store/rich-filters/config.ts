@@ -23,7 +23,9 @@ import {
   isDateFilterType,
   getDateOperatorLabel,
   isDateFilterOperator,
+  getNegatedOperator,
   getOperatorForPayload,
+  isNegatedOperator,
 } from "@plane/utils";
 
 type TOperatorOptionForDisplay = {
@@ -40,7 +42,7 @@ export interface IFilterConfig<P extends TFilterProperty> extends TFilterConfig<
     operator: TAllAvailableOperatorsForDisplay
   ) => TOperatorSpecificConfigs[keyof TOperatorSpecificConfigs] | undefined;
   getLabelForOperator: (operator: TAllAvailableOperatorsForDisplay | undefined) => string;
-  getDisplayOperatorByValue: <T extends TSupportedOperators>(operator: T, value: TFilterValue) => T;
+  getDisplayOperatorByValue: <T extends TAllAvailableOperatorsForDisplay>(operator: T, value: TFilterValue) => T;
   getAllDisplayOperatorOptionsByValue: (value: TFilterValue) => TOperatorOptionForDisplay[];
   // actions
   mutate: (updates: Partial<TFilterConfig<P>>) => void;
@@ -123,7 +125,13 @@ export class FilterConfig<P extends TFilterProperty> implements IFilterConfig<P>
 
     const operatorConfig = this.getOperatorConfig(operator);
 
-    if (operatorConfig?.operatorLabel) {
+    if (isNegatedOperator(operator)) {
+      // A config-supplied `operatorLabel` describes the positive form, so it must not be
+      // reused here - only an explicit `negOperatorLabel` overrides the default wording.
+      if (operatorConfig?.allowNegative === true && operatorConfig.negOperatorLabel) {
+        return operatorConfig.negOperatorLabel;
+      }
+    } else if (operatorConfig?.operatorLabel) {
       return operatorConfig.operatorLabel;
     }
 
@@ -142,7 +150,11 @@ export class FilterConfig<P extends TFilterProperty> implements IFilterConfig<P>
   getDisplayOperatorByValue: IFilterConfig<P>["getDisplayOperatorByValue"] = computedFn((operator, value) => {
     const operatorConfig = this.getOperatorConfig(operator);
     if (operatorConfig?.type === FILTER_FIELD_TYPE.MULTI_SELECT && (Array.isArray(value) ? value.length : 0) <= 1) {
-      return operatorConfig.singleValueOperator as typeof operator;
+      const { singleValueOperator } = operatorConfig;
+      // Collapsing "is none of" down to a single value must stay negated ("is not")
+      return (
+        isNegatedOperator(operator) ? getNegatedOperator(singleValueOperator) : singleValueOperator
+      ) as typeof operator;
     }
     return operator;
   });
@@ -195,8 +207,30 @@ export class FilterConfig<P extends TFilterProperty> implements IFilterConfig<P>
 
   // ------------ private helpers ------------
 
+  /**
+   * Returns the negated twin of an operator as an extra dropdown option, when the operator's
+   * config opts into negation. The condition itself keeps the positive operator - the negation
+   * is carried by a NOT group in the expression tree.
+   * @param operator - The positive operator being expanded
+   * @param value - The current filter value, used to pick the singular/plural wording
+   * @returns The negated operator option, or undefined when negation is not allowed
+   */
   private _getAdditionalOperatorOptions = (
-    _operator: TSupportedOperators,
-    _value: TFilterValue
-  ): TOperatorOptionForDisplay | undefined => undefined;
+    operator: TSupportedOperators,
+    value: TFilterValue
+  ): TOperatorOptionForDisplay | undefined => {
+    const operatorConfig = this.supportedOperatorConfigsMap.get(operator);
+    if (operatorConfig?.allowNegative !== true) return undefined;
+
+    const negatedOperator = getNegatedOperator(operator);
+    // No negated counterpart is defined for this operator
+    if (negatedOperator === operator) return undefined;
+
+    const displayOperator = this.getDisplayOperatorByValue(negatedOperator, value);
+
+    return {
+      value: negatedOperator,
+      label: this.getLabelForOperator(displayOperator),
+    };
+  };
 }

@@ -11,6 +11,7 @@ import type {
   TFilterConditionNode,
   TFilterConditionPayload,
   TFilterExpression,
+  TFilterNotGroupNode,
   TFilterProperty,
   TFilterValue,
 } from "@plane/types";
@@ -41,4 +42,16 @@ export const createAndGroupNode = <P extends TFilterProperty>(
   type: FILTER_NODE_TYPE.GROUP,
   logicalOperator: LOGICAL_OPERATOR.AND,
   children: nodes,
+});
+
+/**
+ * Creates a NOT group node wrapping a single child, with a unique ID.
+ * @param node - The node to negate
+ * @returns The created NOT group node
+ */
+export const createNotGroupNode = <P extends TFilterProperty>(node: TFilterExpression<P>): TFilterNotGroupNode<P> => ({
+  id: uuidv4(),
+  type: FILTER_NODE_TYPE.GROUP,
+  logicalOperator: LOGICAL_OPERATOR.NOT,
+  child: node,
 });
