@@ -13,6 +13,11 @@ RUN corepack enable pnpm
 
 FROM base AS builder
 
+# Bring in the root package.json first so corepack resolves the pinned
+# `packageManager` (pnpm@11.3.0). Without it corepack fetches whatever pnpm is
+# newest, and pnpm >=12 aborts under qemu-emulated linux/amd64 builds with a
+# tokio I/O driver panic.
+COPY package.json ./
 RUN pnpm add -g turbo@2.9.18
 
 COPY . .

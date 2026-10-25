@@ -79,10 +79,23 @@ export type TFilterAndGroupNode<P extends TFilterProperty> = TBaseFilterNode & {
 };
 
 /**
+ * Container node that inverts exactly one child expression.
+ * - type: Node type (group)
+ * - logicalOperator: NOT operator
+ * - child: The single expression being negated
+ * @template P - Property key type
+ */
+export type TFilterNotGroupNode<P extends TFilterProperty> = TBaseFilterNode & {
+  type: typeof FILTER_NODE_TYPE.GROUP;
+  logicalOperator: typeof LOGICAL_OPERATOR.NOT;
+  child: TFilterExpression<P>;
+};
+
+/**
  * Union type for all group node types - AND, OR, and NOT groups.
  * @template P - Property key type
  */
-export type TFilterGroupNode<P extends TFilterProperty> = TFilterAndGroupNode<P>;
+export type TFilterGroupNode<P extends TFilterProperty> = TFilterAndGroupNode<P> | TFilterNotGroupNode<P>;
 
 /**
  * Union type for any filter node - either a single condition or a group container.
@@ -110,7 +123,13 @@ export type TFilterConditionPayload<P extends TFilterProperty, V extends TFilter
 export type TFilterAndGroupPayload<P extends TFilterProperty> = Omit<TFilterAndGroupNode<P>, keyof TBaseFilterNode>;
 
 /**
+ * Payload for creating/updating NOT group nodes - excludes base node properties.
+ * @template P - Property key type
+ */
+export type TFilterNotGroupPayload<P extends TFilterProperty> = Omit<TFilterNotGroupNode<P>, keyof TBaseFilterNode>;
+
+/**
  * Union payload type for creating/updating any group node - excludes base node properties.
  * @template P - Property key type
  */
-export type TFilterGroupPayload<P extends TFilterProperty> = TFilterAndGroupPayload<P>;
+export type TFilterGroupPayload<P extends TFilterProperty> = TFilterAndGroupPayload<P> | TFilterNotGroupPayload<P>;

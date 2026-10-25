@@ -83,6 +83,10 @@ export const createGroupComparable = <P extends TFilterProperty>(
 
   return processGroupNode(group, {
     onAndGroup: (andGroup) => createComparableChildren(andGroup.children, baseComparable),
+    onNotGroup: (notGroup) => ({
+      ...baseComparable,
+      child: createExpressionComparable(notGroup.child),
+    }),
   });
 };
 

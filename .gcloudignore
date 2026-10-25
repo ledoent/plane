@@ -1,0 +1,63 @@
+# Source exclusions for `gcloud builds submit` (see cloudbuild.yaml).
+#
+# This file has to exist. Without it gcloud synthesises an ignore list from
+# .gitignore AND adds .gitignore itself to it — but the Node Dockerfiles do
+# `COPY .gitignore .gitignore`, so the build fails with "file not found in
+# build context". Listing the exclusions here keeps .gitignore in the upload.
+#
+# Keep this in step with .gitignore for anything large; the upload should stay
+# in the tens of MiB, not gigabytes.
+
+.git/
+.gitmodules
+
+# Dependencies and build output — restored or regenerated inside the image
+node_modules/
+**/node_modules/
+.pnp/
+.pnp.js
+.next/
+**/.next/
+out/
+**/out/
+dist/
+**/dist/
+build/
+**/build/
+.turbo/
+**/.turbo/
+.react-router/
+**/.react-router/
+.yarn/
+tsconfig.tsbuildinfo
+**/tsconfig.tsbuildinfo
+
+# Python virtualenvs and artefacts
+venv/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+staticfiles/
+mediafiles/
+htmlcov/
+.coverage
+
+# Local-only: secrets, logs, editor and OS noise
+.env
+.env.*
+!.env.example
+*.pem
+logs/
+*.log
+coverage/
+.history/
+.vercel/
+.DS_Store
+
+# Test scaffolding that never belongs in an image
+e2e/
+**/test-results/
+**/playwright-report/
+.claude/

@@ -7,7 +7,7 @@
 import type { TFilterGroupNode, TFilterProperty } from "@plane/types";
 import { processGroupNode } from "../../types/shared";
 import type { TTreeTransformFn, TTreeTransformResult } from "./core";
-import { transformGroupWithChildren } from "./core";
+import { transformExpressionTree, transformGroupWithChildren } from "./core";
 
 /**
  * Transforms groups by processing children.
@@ -22,4 +22,17 @@ export const transformGroup = <P extends TFilterProperty>(
 ): TTreeTransformResult<P> =>
   processGroupNode(group, {
     onAndGroup: (andGroup) => transformGroupWithChildren(andGroup, transformFn),
+    onNotGroup: (notGroup) => {
+      const childResult = transformExpressionTree(notGroup.child, transformFn);
+
+      // The negation has nothing left to negate - drop the whole group
+      if (childResult.expression === null) {
+        return { expression: null, shouldNotify: childResult.shouldNotify ?? false };
+      }
+
+      return {
+        expression: { ...notGroup, child: childResult.expression },
+        shouldNotify: childResult.shouldNotify ?? false,
+      };
+    },
   });
